@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import date
+from datetime import date, datetime
 
 import pandas as pd
 import plotly.express as px
@@ -64,6 +64,7 @@ def init_state() -> None:
         }
     if "live" not in st.session_state:
         st.session_state.live = {
+            "autopilot_enabled": False,
             "time_of_day": "Dinner",
             "crowd_level": 55,
             "noise_level": 50,
@@ -85,6 +86,46 @@ def _map_business_goal_to_outcome(goal: str) -> str:
         "Increase energy": "Increase social energy",
     }
     return mapping.get(goal, "Keep people longer")
+
+
+def infer_time_of_day(hour_24: int) -> str:
+    if 5 <= hour_24 <= 10:
+        return "Morning"
+    if 11 <= hour_24 <= 14:
+        return "Lunch"
+    if 15 <= hour_24 <= 17:
+        return "Afternoon"
+    if 18 <= hour_24 <= 22:
+        return "Dinner"
+    return "Late Night"
+
+
+def apply_autopilot(profile: dict, live: dict) -> tuple[dict, list[str]]:
+    updated = dict(live)
+    notes: list[str] = []
+
+    current_hour = datetime.now().hour
+    inferred_block = infer_time_of_day(current_hour)
+    if updated["time_of_day"] != inferred_block:
+        updated["time_of_day"] = inferred_block
+        notes.append(f"Time block auto-set to **{inferred_block}** from current hour ({current_hour:02d}:00).")
+
+    goal_based_outcome = _map_business_goal_to_outcome(profile["default_goal"])
+    desired_outcome = goal_based_outcome
+    if live["crowd_level"] >= 80:
+        desired_outcome = "Move people faster"
+        notes.append("High crowd detected, so the AI optimized for faster turnover.")
+    elif live["crowd_level"] <= 25:
+        desired_outcome = "Keep people longer"
+        notes.append("Low crowd detected, so the AI optimized to increase dwell time.")
+    elif live["noise_level"] >= 75:
+        desired_outcome = "Calm people down"
+        notes.append("High ambient noise detected, so the AI optimized to calm the room.")
+
+    updated["desired_outcome"] = desired_outcome
+    if not notes:
+        notes.append("Autopilot kept your current settings because live conditions are stable.")
+    return updated, notes
 
 
 def _base_reco_by_context(business_type: str, time_of_day: str, outcome: str) -> dict:
@@ -400,6 +441,19 @@ with profile_tab:
 with live_tab:
     st.subheader("Tune your live atmosphere")
     with st.container(border=True):
+        st.session_state.live["autopilot_enabled"] = st.toggle(
+            "Enable AI Autopilot (automatic time + outcome decisions)",
+            value=st.session_state.live["autopilot_enabled"],
+            help="When enabled, Atmosphere AI automatically chooses the time block and desired outcome based on crowd/noise signals and your default business goal.",
+        )
+
+        if st.session_state.live["autopilot_enabled"]:
+            updated_live, autopilot_notes = apply_autopilot(st.session_state.profile, st.session_state.live)
+            st.session_state.live.update(updated_live)
+            st.info("Autopilot is active. Atmosphere AI is adjusting core settings for you.")
+            for note in autopilot_notes:
+                st.write(f"- {note}")
+
         l1, l2 = st.columns(2)
         with l1:
             st.session_state.live["time_of_day"] = st.selectbox(
