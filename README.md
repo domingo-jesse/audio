@@ -16,6 +16,7 @@ The app helps owners and managers choose the right music atmosphere using busine
    - Generate recommendations for mood, genre, BPM range, volume, energy, playlist concept, and risk flags.
    - Uses rule-based logic by default.
    - If `OPENAI_API_KEY` is available and optional atmosphere text is provided, a more customized JSON recommendation is generated via OpenAI.
+   - Includes an **AI Adjustment Copilot** checklist that translates recommendations into live, step-by-step adjustment actions.
 4. **Schedule Builder**
    - Create a sample daily schedule across morning/lunch/afternoon/evening/late night.
 5. **Analytics / Experiment Tracker**

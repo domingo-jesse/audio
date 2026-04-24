@@ -163,6 +163,86 @@ def _risk_checks(crowd_level: int, noise_level: int, volume: str) -> list[str]:
     return risks
 
 
+def build_adjustment_actions(rec: dict, live: dict) -> list[dict]:
+    actions: list[dict] = []
+    crowd_level = live["crowd_level"]
+    noise_level = live["noise_level"]
+    current_energy = live["current_energy"]
+
+    target_energy = rec["energy"].lower()
+    energy_map = {"low": 30, "low-medium": 45, "medium": 55, "medium-high": 70, "high": 82}
+    target_energy_score = energy_map.get(target_energy, 50)
+    gap = target_energy_score - current_energy
+
+    if gap >= 12:
+        actions.append(
+            {
+                "action": "Raise energy in small steps",
+                "how": "Add 2-3 higher-BPM tracks every 10 minutes until the room reaches your target vibe.",
+                "priority": "High",
+            }
+        )
+    elif gap <= -12:
+        actions.append(
+            {
+                "action": "Lower intensity gradually",
+                "how": "Switch to smoother tracks and reduce rhythmic density over 10-15 minutes.",
+                "priority": "High",
+            }
+        )
+    else:
+        actions.append(
+            {
+                "action": "Hold current energy",
+                "how": "Keep a stable blend and avoid abrupt jumps in BPM or track intensity.",
+                "priority": "Medium",
+            }
+        )
+
+    if crowd_level >= 75:
+        actions.append(
+            {
+                "action": "Prioritize clarity over loudness",
+                "how": "Choose cleaner mixes with less sonic clutter so conversations stay comfortable.",
+                "priority": "High",
+            }
+        )
+    elif crowd_level <= 25:
+        actions.append(
+            {
+                "action": "Warm up the room",
+                "how": "Use familiar, melodic tracks with moderate momentum to reduce 'empty room' feel.",
+                "priority": "Medium",
+            }
+        )
+
+    if noise_level >= 70:
+        actions.append(
+            {
+                "action": "Avoid volume escalation",
+                "how": "Do not chase ambient noise with more volume; instead use lighter arrangements.",
+                "priority": "High",
+            }
+        )
+    elif noise_level <= 25:
+        actions.append(
+            {
+                "action": "Protect quiet comfort",
+                "how": "Keep transitions gentle and maintain lower volume to avoid startling guests.",
+                "priority": "Medium",
+            }
+        )
+
+    actions.append(
+        {
+            "action": "Re-check every 15 minutes",
+            "how": "Update crowd, noise, and energy inputs and let Atmosphere AI refresh the recommendation.",
+            "priority": "Always",
+        }
+    )
+    return actions
+
+
 def rule_based_recommendation(profile: dict, live: dict) -> dict:
     rec = _base_reco_by_context(
         business_type=profile["business_type"],
@@ -383,6 +463,13 @@ with rec_tab:
             st.metric("BPM target (midpoint)", f"{bpm_mid}")
             st.metric("Recommended volume index", f"{volume_map.get(volume_level, 50)}/100")
             st.metric("Recommended energy index", f"{energy_map.get(rec['energy'].lower(), 50)}/100")
+
+    st.markdown("### AI Adjustment Copilot")
+    st.caption("A quick execution plan so the AI handles most of the moment-to-moment music adjustments.")
+    actions = build_adjustment_actions(rec, st.session_state.live)
+    with st.container(border=True):
+        for idx, step in enumerate(actions, start=1):
+            st.markdown(f"**{idx}. {step['action']}**  \nPriority: `{step['priority']}`  \n{step['how']}")
 
 with sched_tab:
     st.subheader("Daily schedule builder")
