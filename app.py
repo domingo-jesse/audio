@@ -51,6 +51,111 @@ DESIRED_OUTCOMES = [
     "Increase social energy",
     "Improve focus",
 ]
+LIBRARY_MOODS = ["Calm", "Cozy", "Premium", "Energetic", "Focused", "Social", "Romantic", "Luxury", "Upbeat"]
+TIME_OF_DAY_OPTIONS = ["Morning", "Lunch", "Afternoon", "Dinner", "Late Night", "Any"]
+BUSINESS_TYPE_OPTIONS = BUSINESS_TYPES + ["Any"]
+LICENSE_OPTIONS = ["Royalty-free", "Commercially licensed", "Unknown"]
+
+
+def sample_tracks() -> list[dict]:
+    return [
+        {
+            "title": "Morning Focus Acoustic",
+            "artist": "Atlas Lane",
+            "file_path": "",
+            "bpm": 78,
+            "mood_tags": ["Cozy", "Focused"],
+            "genre": "Acoustic",
+            "energy": 35,
+            "best_time_of_day": "Morning",
+            "best_business_type": "Coffee Shop",
+            "license_status": "Royalty-free",
+        },
+        {
+            "title": "Premium Dinner Jazz",
+            "artist": "Velvet Room Trio",
+            "file_path": "",
+            "bpm": 82,
+            "mood_tags": ["Premium", "Luxury"],
+            "genre": "Jazz",
+            "energy": 40,
+            "best_time_of_day": "Dinner",
+            "best_business_type": "Restaurant",
+            "license_status": "Commercially licensed",
+        },
+        {
+            "title": "Retail Energy Pop",
+            "artist": "Neon Avenue",
+            "file_path": "",
+            "bpm": 118,
+            "mood_tags": ["Upbeat", "Energetic"],
+            "genre": "Pop",
+            "energy": 78,
+            "best_time_of_day": "Afternoon",
+            "best_business_type": "Retail Store",
+            "license_status": "Royalty-free",
+        },
+        {
+            "title": "Calm Lobby Ambient",
+            "artist": "Cloud District",
+            "file_path": "",
+            "bpm": 65,
+            "mood_tags": ["Calm", "Luxury"],
+            "genre": "Ambient",
+            "energy": 22,
+            "best_time_of_day": "Any",
+            "best_business_type": "Hotel Lobby",
+            "license_status": "Commercially licensed",
+        },
+        {
+            "title": "Coffee Shop Warmth",
+            "artist": "Harbor & Pine",
+            "file_path": "",
+            "bpm": 88,
+            "mood_tags": ["Cozy", "Social"],
+            "genre": "Indie Soul",
+            "energy": 48,
+            "best_time_of_day": "Lunch",
+            "best_business_type": "Coffee Shop",
+            "license_status": "Royalty-free",
+        },
+        {
+            "title": "Gym Push Beat",
+            "artist": "Pulse Engine",
+            "file_path": "",
+            "bpm": 130,
+            "mood_tags": ["Energetic", "Upbeat"],
+            "genre": "Electronic",
+            "energy": 90,
+            "best_time_of_day": "Any",
+            "best_business_type": "Gym",
+            "license_status": "Commercially licensed",
+        },
+        {
+            "title": "Late Night Lounge",
+            "artist": "Noir Skyline",
+            "file_path": "",
+            "bpm": 72,
+            "mood_tags": ["Romantic", "Premium"],
+            "genre": "Lounge",
+            "energy": 30,
+            "best_time_of_day": "Late Night",
+            "best_business_type": "Bar",
+            "license_status": "Royalty-free",
+        },
+        {
+            "title": "Afternoon Browse Groove",
+            "artist": "Market Circuit",
+            "file_path": "",
+            "bpm": 102,
+            "mood_tags": ["Social", "Upbeat"],
+            "genre": "Nu Disco",
+            "energy": 62,
+            "best_time_of_day": "Afternoon",
+            "best_business_type": "Retail Store",
+            "license_status": "Commercially licensed",
+        },
+    ]
 
 
 def init_state() -> None:
@@ -74,6 +179,132 @@ def init_state() -> None:
         }
     if "analytics" not in st.session_state:
         st.session_state.analytics = []
+    if "music_library" not in st.session_state:
+        st.session_state.music_library = sample_tracks()
+    if "music_filters" not in st.session_state:
+        st.session_state.music_filters = {"min_bpm": 70, "max_bpm": 120, "desired_moods": []}
+
+
+def filter_tracks_by_controls(
+    tracks: list[dict], min_bpm: int, max_bpm: int, desired_moods: list[str], allow_unknown_license: bool = True
+) -> list[dict]:
+    filtered: list[dict] = []
+    for track in tracks:
+        if not allow_unknown_license and track["license_status"] == "Unknown":
+            continue
+        if not (min_bpm <= track["bpm"] <= max_bpm):
+            continue
+        if desired_moods and not set(desired_moods).intersection(set(track["mood_tags"])):
+            continue
+        filtered.append(track)
+    return filtered
+
+
+def score_track(
+    track: dict,
+    business_type: str,
+    time_of_day: str,
+    desired_goal: str,
+    desired_moods: list[str],
+    crowd_level: int,
+    noise_level: int,
+    min_bpm: int,
+    max_bpm: int,
+) -> tuple[int, list[str]]:
+    score = 0
+    reasons: list[str] = []
+
+    if min_bpm <= track["bpm"] <= max_bpm:
+        score += 30
+        reasons.append("BPM is inside your selected range (+30).")
+
+    mood_overlap = set(desired_moods).intersection(set(track["mood_tags"])) if desired_moods else set()
+    if not desired_moods:
+        score += 25
+        reasons.append("No mood filter set, so this track remains mood-compatible (+25).")
+    elif mood_overlap:
+        score += 25
+        reasons.append(f"Mood match found: {', '.join(sorted(mood_overlap))} (+25).")
+
+    if track["best_time_of_day"] in {time_of_day, "Any"}:
+        score += 15
+        reasons.append("Time-of-day match (+15).")
+
+    if track["best_business_type"] in {business_type, "Any"}:
+        score += 15
+        reasons.append("Business-type match (+15).")
+
+    energy_score = 0
+    if noise_level >= 70 and track["energy"] <= 55:
+        energy_score = 10
+        reasons.append("High noise environment: lower-energy track preferred (+10).")
+    elif crowd_level <= 35 and desired_goal == "Increase energy" and track["energy"] >= 65:
+        energy_score = 10
+        reasons.append("Low crowd + increase-energy goal: higher energy is preferred (+10).")
+    elif 40 <= track["energy"] <= 70:
+        energy_score = 10
+        reasons.append("Energy is balanced for current crowd/noise conditions (+10).")
+    score += energy_score
+
+    if track["license_status"] in {"Royalty-free", "Commercially licensed"}:
+        score += 5
+        reasons.append("Track has known safe license status (+5).")
+
+    premium_genres = {"jazz", "acoustic", "lounge"}
+    premium_moods = {"Calm", "Luxury", "Premium"}
+    if desired_goal == "Premium experience":
+        if premium_moods.intersection(set(track["mood_tags"])) or track["genre"].lower() in premium_genres:
+            score += 8
+            reasons.append("Supports premium-experience goal (calm/luxury/premium/jazz/acoustic/lounge bias).")
+
+    if desired_goal == "Faster turnover" and track["bpm"] >= 105:
+        score += 8
+        reasons.append("Higher BPM supports faster-turnover intent.")
+    if desired_goal == "Increase dwell time" and track["bpm"] <= 92:
+        score += 8
+        reasons.append("Lower BPM supports longer dwell time.")
+
+    return score, reasons
+
+
+def recommend_track(
+    tracks: list[dict],
+    business_type: str,
+    time_of_day: str,
+    desired_goal: str,
+    desired_moods: list[str],
+    min_bpm: int,
+    max_bpm: int,
+    crowd_level: int,
+    noise_level: int,
+) -> dict | None:
+    eligible_tracks = filter_tracks_by_controls(
+        tracks=tracks,
+        min_bpm=min_bpm,
+        max_bpm=max_bpm,
+        desired_moods=desired_moods,
+        allow_unknown_license=False,
+    )
+    if not eligible_tracks:
+        return None
+
+    ranked: list[dict] = []
+    for track in eligible_tracks:
+        score, reasons = score_track(
+            track=track,
+            business_type=business_type,
+            time_of_day=time_of_day,
+            desired_goal=desired_goal,
+            desired_moods=desired_moods,
+            crowd_level=crowd_level,
+            noise_level=noise_level,
+            min_bpm=min_bpm,
+            max_bpm=max_bpm,
+        )
+        ranked.append({"track": track, "score": score, "reasons": reasons})
+
+    ranked.sort(key=lambda item: item["score"], reverse=True)
+    return ranked[0]
 
 
 def _map_business_goal_to_outcome(goal: str) -> str:
@@ -396,13 +627,14 @@ st.info(
     "Legal note: This MVP intentionally does not include Spotify playback. Public business playback typically requires licensed business music providers."
 )
 
-profile_tab, live_tab, rec_tab, sched_tab, analytics_tab = st.tabs(
+profile_tab, live_tab, rec_tab, library_tab, sched_tab, analytics_tab = st.tabs(
     [
         "1) Business Profile",
         "2) Live Atmosphere Control",
         "3) AI Recommendation",
-        "4) Schedule Builder",
-        "5) Analytics / Experiment Tracker",
+        "4) Music Library",
+        "5) Schedule Builder",
+        "6) Analytics / Experiment Tracker",
     ]
 )
 
@@ -482,6 +714,34 @@ with live_tab:
                 placeholder="Example: Busy dining room, conversations are loud, guests are waiting for tables...",
             )
 
+        st.markdown("### Music Filters")
+        f1, f2, f3 = st.columns([1, 1, 2])
+        with f1:
+            st.session_state.music_filters["min_bpm"] = st.slider(
+                "Minimum BPM", 50, 160, value=st.session_state.music_filters["min_bpm"]
+            )
+        with f2:
+            st.session_state.music_filters["max_bpm"] = st.slider(
+                "Maximum BPM", 50, 160, value=st.session_state.music_filters["max_bpm"]
+            )
+        if st.session_state.music_filters["min_bpm"] > st.session_state.music_filters["max_bpm"]:
+            st.session_state.music_filters["max_bpm"] = st.session_state.music_filters["min_bpm"]
+        with f3:
+            st.session_state.music_filters["desired_moods"] = st.multiselect(
+                "Desired moods",
+                options=LIBRARY_MOODS,
+                default=st.session_state.music_filters["desired_moods"],
+            )
+
+        filtered_preview = filter_tracks_by_controls(
+            tracks=st.session_state.music_library,
+            min_bpm=st.session_state.music_filters["min_bpm"],
+            max_bpm=st.session_state.music_filters["max_bpm"],
+            desired_moods=st.session_state.music_filters["desired_moods"],
+            allow_unknown_license=True,
+        )
+        st.caption(f"{len(filtered_preview)} track(s) match current live filters.")
+
 with rec_tab:
     st.subheader("Recommendation engine")
     base_rec = rule_based_recommendation(st.session_state.profile, st.session_state.live)
@@ -518,12 +778,95 @@ with rec_tab:
             st.metric("Recommended volume index", f"{volume_map.get(volume_level, 50)}/100")
             st.metric("Recommended energy index", f"{energy_map.get(rec['energy'].lower(), 50)}/100")
 
+    track_result = recommend_track(
+        tracks=st.session_state.music_library,
+        business_type=st.session_state.profile["business_type"],
+        time_of_day=st.session_state.live["time_of_day"],
+        desired_goal=st.session_state.profile["default_goal"],
+        desired_moods=st.session_state.music_filters["desired_moods"],
+        min_bpm=st.session_state.music_filters["min_bpm"],
+        max_bpm=st.session_state.music_filters["max_bpm"],
+        crowd_level=st.session_state.live["crowd_level"],
+        noise_level=st.session_state.live["noise_level"],
+    )
+
+    st.markdown("### Suggested Track from Your Music Library")
+    with st.container(border=True):
+        if track_result is None:
+            st.warning(
+                "No matching tracks found. Try widening the BPM range, selecting fewer moods, or adding more tracks."
+            )
+        else:
+            selected = track_result["track"]
+            st.write(f"**{selected['title']}** — {selected['artist']}")
+            st.write(f"Genre: {selected['genre']} | BPM: {selected['bpm']} | Energy: {selected['energy']}/100")
+            st.write(
+                f"Best fit: {selected['best_time_of_day']} / {selected['best_business_type']} | License: {selected['license_status']}"
+            )
+            st.success(f"Match score: {track_result['score']}")
+            st.markdown("**Why this was selected**")
+            for reason in track_result["reasons"]:
+                st.write(f"- {reason}")
+
+            file_path = selected["file_path"].strip()
+            if file_path and os.path.exists(file_path):
+                st.audio(file_path)
+            else:
+                st.caption("Audio preview unavailable. Add a valid local MP3 file path.")
+
     st.markdown("### AI Adjustment Copilot")
     st.caption("A quick execution plan so the AI handles most of the moment-to-moment music adjustments.")
     actions = build_adjustment_actions(rec, st.session_state.live)
     with st.container(border=True):
         for idx, step in enumerate(actions, start=1):
             st.markdown(f"**{idx}. {step['action']}**  \nPriority: `{step['priority']}`  \n{step['how']}")
+
+with library_tab:
+    st.subheader("Music Library")
+    with st.container(border=True):
+        with st.form("add_track_form", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            with c1:
+                track_title = st.text_input("Track title")
+                artist = st.text_input("Artist")
+                file_path = st.text_input("File path or URL")
+                bpm = st.number_input("BPM", min_value=40, max_value=220, value=95, step=1)
+                mood_tags = st.multiselect("Mood tags", options=LIBRARY_MOODS, default=["Calm"])
+            with c2:
+                genre = st.text_input("Genre", value="Ambient")
+                energy = st.slider("Energy level", 0, 100, value=50)
+                best_time = st.selectbox("Best time of day", options=TIME_OF_DAY_OPTIONS, index=5)
+                best_business = st.selectbox("Best business type", options=BUSINESS_TYPE_OPTIONS, index=0)
+                license_status = st.selectbox("License status", options=LICENSE_OPTIONS, index=0)
+
+            add_track = st.form_submit_button("Add track", type="primary")
+            if add_track:
+                if not track_title.strip():
+                    st.error("Track title is required.")
+                else:
+                    st.session_state.music_library.append(
+                        {
+                            "title": track_title.strip(),
+                            "artist": artist.strip() or "Unknown Artist",
+                            "file_path": file_path.strip(),
+                            "bpm": int(bpm),
+                            "mood_tags": mood_tags,
+                            "genre": genre.strip() or "Unknown",
+                            "energy": energy,
+                            "best_time_of_day": best_time,
+                            "best_business_type": best_business,
+                            "license_status": license_status,
+                        }
+                    )
+                    st.success("Track added to session library.")
+
+    library_df = pd.DataFrame(st.session_state.music_library)
+    if library_df.empty:
+        st.info("No tracks in the library yet.")
+    else:
+        show_df = library_df.copy()
+        show_df["mood_tags"] = show_df["mood_tags"].apply(lambda vals: ", ".join(vals))
+        st.dataframe(show_df, use_container_width=True, hide_index=True)
 
 with sched_tab:
     st.subheader("Daily schedule builder")
