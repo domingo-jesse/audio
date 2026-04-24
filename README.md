@@ -12,6 +12,7 @@ The app helps owners and managers choose the right music atmosphere using busine
    - Capture business name, type, brand vibe, target customer, and default goal.
 2. **Live Atmosphere Control**
    - Set time of day, crowd level, noise level, current energy, and desired outcome.
+   - Optional **AI Autopilot** can automatically pick time block and desired outcome from current conditions.
 3. **AI Recommendation**
    - Generate recommendations for mood, genre, BPM range, volume, energy, playlist concept, and risk flags.
    - Uses rule-based logic by default.
