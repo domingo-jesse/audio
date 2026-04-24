@@ -626,15 +626,16 @@ st.caption(
 st.info(
     "Legal note: This MVP intentionally does not include Spotify playback. Public business playback typically requires licensed business music providers."
 )
+st.caption("Business profile is optional right now. You can start with Live Atmosphere Control using smart defaults.")
 
-profile_tab, live_tab, rec_tab, library_tab, sched_tab, analytics_tab = st.tabs(
+live_tab, rec_tab, library_tab, sched_tab, analytics_tab, profile_tab = st.tabs(
     [
-        "1) Business Profile",
-        "2) Live Atmosphere Control",
-        "3) AI Recommendation",
-        "4) Music Library",
-        "5) Schedule Builder",
-        "6) Analytics / Experiment Tracker",
+        "1) Live Atmosphere Control",
+        "2) AI Recommendation",
+        "3) Music Library",
+        "4) Schedule Builder",
+        "5) Analytics / Experiment Tracker",
+        "6) Business Profile (Optional)",
     ]
 )
 
@@ -668,7 +669,7 @@ with profile_tab:
                 index=BUSINESS_GOALS.index(st.session_state.profile["default_goal"]),
             )
 
-    st.success("Profile saved in this session.")
+    st.success("Profile saved in this session. These fields are optional for MVP use.")
 
 with live_tab:
     st.subheader("Tune your live atmosphere")
