@@ -1038,36 +1038,6 @@ st.markdown(
             padding-top: 1.1rem;
             max-width: 1120px;
         }
-        .whisper-shell {
-            background: #ffffff;
-            border: 1px solid #e2e8f0;
-            border-radius: 16px;
-            padding: 1.1rem 1.2rem;
-            box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
-        }
-        .whisper-hero {
-            background: linear-gradient(120deg, #eef2ff, #ecfeff);
-            border: 1px solid #c7d2fe;
-            border-radius: 14px;
-            padding: 1rem 1.1rem;
-            margin-bottom: 0.9rem;
-        }
-        .whisper-kicker {
-            font-size: 0.86rem;
-            letter-spacing: 0.02em;
-            color: #334155;
-            margin-bottom: 0.2rem;
-        }
-        .whisper-title {
-            font-size: 1.65rem;
-            font-weight: 700;
-            color: #1e293b;
-            margin: 0.15rem 0;
-        }
-        .whisper-sub {
-            color: #334155;
-            margin: 0;
-        }
         .stAlert {
             border-radius: 12px;
         }
@@ -1105,26 +1075,6 @@ st.markdown(
 )
 
 st.title("🎵 Whisper")
-st.caption(
-    "Whisper helps operators identify atmosphere problems and automatically guide the room toward the right experience."
-)
-
-st.info(
-    "Legal note: This MVP intentionally does not include Spotify playback. Public business playback typically requires licensed business music providers."
-)
-st.markdown(
-    """
-    <div class="whisper-shell">
-        <div class="whisper-hero">
-            <p class="whisper-kicker">Primary Workspace</p>
-            <p class="whisper-title">Live Atmosphere Control</p>
-            <p class="whisper-sub">The app now opens in focus mode so this is the primary view. Secondary tools are tucked away in the sidebar.</p>
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-st.caption("Business profile is optional right now. You can start here with smart defaults.")
 
 show_secondary = st.sidebar.toggle("Show secondary workspaces", value=False)
 st.sidebar.caption("Turn this on when you want AI recommendation, library, schedule, analytics, or profile editors.")
