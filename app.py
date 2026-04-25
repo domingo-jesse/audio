@@ -9,6 +9,7 @@ import pandas as pd
 import plotly.express as px
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 try:
     from openai import OpenAI
@@ -66,7 +67,7 @@ MAX_QUEUE_SIZE = 5
 QUEUE_REFILL_THRESHOLD = 2
 MAX_SONG_DURATION_SECONDS = 300
 MAX_YOUTUBE_SEARCHES_PER_DAY = 25
-FALLBACK_SONGS_PATH = "songs_fallback.csv"
+FALLBACK_SONGS_PATH = os.path.join(os.path.dirname(__file__), "songs_fallback.csv")
 OUTCOME_TO_BOOTSTRAP_MOOD = {
     "Calm people down": "calm",
     "Keep people longer": "cozy",
@@ -1468,8 +1469,19 @@ def render_youtube_audio_player(video_id: str, title: str = "", duration_seconds
         st.error("Missing YouTube video ID for player rendering.")
         return
 
-    embed_url = f"https://www.youtube.com/embed/{video_id}?autoplay=1&enablejsapi=1&rel=0"
-    st.iframe(embed_url, height=240)
+    embed_url = f"https://www.youtube.com/embed/{video_id}?autoplay=1&playsinline=1&enablejsapi=1&rel=0"
+    player_html = f"""
+    <iframe
+        width="100%"
+        height="240"
+        src="{embed_url}"
+        title="{title or 'Now Playing'}"
+        frameborder="0"
+        allow="autoplay; encrypted-media; picture-in-picture"
+        allowfullscreen
+    ></iframe>
+    """
+    components.html(player_html, height=250)
 
 
 def run_autodj_cycle() -> None:
