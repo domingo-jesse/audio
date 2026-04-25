@@ -1,6 +1,7 @@
 import json
 import os
 from datetime import date, datetime
+import time
 
 import pandas as pd
 import plotly.express as px
@@ -11,7 +12,7 @@ try:
 except Exception:  # pragma: no cover
     OpenAI = None
 
-st.set_page_config(page_title="Atmosphere AI", page_icon="🎵", layout="wide")
+st.set_page_config(page_title="Whisper", page_icon="🎵", layout="wide")
 
 BUSINESS_TYPES = [
     "Restaurant",
@@ -508,7 +509,7 @@ def build_adjustment_actions(rec: dict, live: dict) -> list[dict]:
     actions.append(
         {
             "action": "Re-check every 15 minutes",
-            "how": "Update crowd, noise, and energy inputs and let Atmosphere AI refresh the recommendation.",
+            "how": "Update crowd, noise, and energy inputs and let Whisper refresh the recommendation.",
             "priority": "Always",
         }
     )
@@ -591,6 +592,51 @@ def bpm_midpoint(tempo_text: str) -> int:
     return 95
 
 
+def atmosphere_snapshot(live: dict) -> tuple[str, str]:
+    noise = live["noise_level"]
+    crowd = live["crowd_level"]
+
+    if noise >= 75:
+        return "Loud", "Conversation strain detected"
+    if noise >= 60:
+        return "Active", "Conversation requires effort"
+    if crowd <= 20 and noise <= 30:
+        return "Too quiet", "Space feels flat for current traffic"
+    return "Balanced", "Conversation comfort is healthy"
+
+
+def time_context_label(time_of_day: str) -> str:
+    now_text = datetime.now().strftime("%-I:%M %p")
+    rush_map = {
+        "Morning": "Morning setup in progress",
+        "Lunch": "Lunch flow in progress",
+        "Afternoon": "Afternoon pace in progress",
+        "Dinner": "Dinner Rush in progress",
+        "Late Night": "Late-night shift in progress",
+    }
+    return f"{now_text} ({rush_map.get(time_of_day, 'Operational block in progress')})"
+
+
+def transition_plan(live: dict) -> list[str]:
+    steps: list[str] = []
+    noise = live["noise_level"]
+    crowd = live["crowd_level"]
+
+    if noise >= 70:
+        steps.append("Reducing volume ceiling by 6% to improve speech clarity.")
+    else:
+        steps.append("Maintaining current volume ceiling while monitoring speech clarity.")
+
+    if crowd >= 75:
+        steps.append("Selecting cleaner, less dense tracks for crowded conditions.")
+    elif crowd <= 25:
+        steps.append("Introducing warmer tracks to prevent an empty-room feel.")
+    else:
+        steps.append("Holding a steady playlist profile for current occupancy.")
+
+    steps.append("Re-scoring atmosphere every 15 minutes to keep conditions aligned.")
+    return steps
+
 def build_schedule(profile: dict) -> pd.DataFrame:
     rows = []
     for block in ["Morning", "Lunch", "Afternoon", "Evening", "Late Night"]:
@@ -618,9 +664,9 @@ def build_schedule(profile: dict) -> pd.DataFrame:
 
 init_state()
 
-st.title("🎵 Atmosphere AI")
+st.title("🎵 Whisper")
 st.caption(
-    "AI-powered atmosphere recommendations for business spaces — designed for strategy and testing, not direct playback."
+    "Whisper helps operators identify atmosphere problems and automatically guide the room toward the right experience."
 )
 
 st.info(
@@ -672,21 +718,41 @@ with profile_tab:
     st.success("Profile saved in this session. These fields are optional for MVP use.")
 
 with live_tab:
-    st.subheader("Tune your live atmosphere")
-    with st.container(border=True):
-        st.session_state.live["autopilot_enabled"] = st.toggle(
-            "Enable AI Autopilot (automatic time + outcome decisions)",
-            value=st.session_state.live["autopilot_enabled"],
-            help="When enabled, Atmosphere AI automatically chooses the time block and desired outcome based on crowd/noise signals and your default business goal.",
-        )
+    st.subheader("Live Atmosphere Control")
 
-        if st.session_state.live["autopilot_enabled"]:
+    current_atmosphere, atmosphere_issue = atmosphere_snapshot(st.session_state.live)
+    time_context = time_context_label(st.session_state.live["time_of_day"])
+
+    with st.container(border=True):
+        st.markdown(f"### Current Atmosphere: **{current_atmosphere}** ({atmosphere_issue})")
+        st.write(f"**Time of day:** {time_context}")
+        st.write("**System Status:** Monitoring noise and conversation levels")
+
+        auto_pressed = st.button("Let Whisper Handle This", type="primary", use_container_width=True)
+        if auto_pressed:
+            st.session_state.live["autopilot_enabled"] = True
             updated_live, autopilot_notes = apply_autopilot(st.session_state.profile, st.session_state.live)
             st.session_state.live.update(updated_live)
-            st.info("Autopilot is active. Atmosphere AI is adjusting core settings for you.")
-            for note in autopilot_notes:
+            st.session_state.live["last_transition_notes"] = autopilot_notes + transition_plan(st.session_state.live)
+
+    if st.session_state.live.get("autopilot_enabled"):
+        st.info("Whisper is actively adapting your space. Monitoring never stops after this transition.")
+
+        with st.container(border=True):
+            st.markdown("#### Current adjustment")
+            progress = st.progress(0, text="Preparing atmosphere shift...")
+            for pct in [20, 40, 60, 80, 100]:
+                progress.progress(pct, text=f"Applying gradual transition... {pct}%")
+                time.sleep(0.05)
+
+            for note in st.session_state.live.get("last_transition_notes", []):
                 st.write(f"- {note}")
 
+            st.success(
+                "Transition synced with the current atmosphere goal. Whisper remains in continuous monitoring mode and will keep adjusting automatically."
+            )
+
+    with st.expander("Advanced controls (optional)"):
         l1, l2 = st.columns(2)
         with l1:
             st.session_state.live["time_of_day"] = st.selectbox(
@@ -715,7 +781,7 @@ with live_tab:
                 placeholder="Example: Busy dining room, conversations are loud, guests are waiting for tables...",
             )
 
-        st.markdown("### Music Filters")
+        st.markdown("##### Music Filters")
         f1, f2, f3 = st.columns([1, 1, 2])
         with f1:
             st.session_state.music_filters["min_bpm"] = st.slider(
