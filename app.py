@@ -195,6 +195,16 @@ def init_state() -> None:
         st.session_state.ai_music_interpretation = None
     if "ai_selected_song" not in st.session_state:
         st.session_state.ai_selected_song = None
+    if "song_queue" not in st.session_state:
+        st.session_state.song_queue = []
+    if "current_song" not in st.session_state:
+        st.session_state.current_song = None
+    if "last_ai_search_time" not in st.session_state:
+        st.session_state.last_ai_search_time = 0.0
+    if "is_playing" not in st.session_state:
+        st.session_state.is_playing = False
+    if "auto_dj_mode" not in st.session_state:
+        st.session_state.auto_dj_mode = True
 
 
 def read_secret(key: str) -> str | None:
@@ -310,6 +320,201 @@ def fallback_search_query(prompt: str) -> str:
     return f"https://www.youtube.com/results?search_query={quote_plus(prompt)}"
 
 
+def format_duration(seconds: int) -> str:
+    minutes, secs = divmod(max(0, int(seconds)), 60)
+    return f"{minutes}:{secs:02d}"
+
+
+def generate_ai_song_ideas(prompt: str, setting: str | None = None, energy: str | None = None, vocals: str | None = None) -> list[str]:
+    api_key = read_secret("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY is missing. Add it to Streamlit secrets to enable AI queue generation.")
+    if OpenAI is None:
+        raise ValueError("OpenAI SDK is not installed in this environment.")
+
+    client = OpenAI(api_key=api_key)
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["queries"],
+        "properties": {
+            "queries": {
+                "type": "array",
+                "minItems": 6,
+                "maxItems": 10,
+                "items": {"type": "string"},
+            }
+        },
+    }
+    payload = {"prompt": prompt, "setting": setting, "energy": energy, "vocals": vocals}
+    instructions = (
+        "You are a music curator for short tracks. Return concise YouTube search queries in the format "
+        "'song title artist official audio'. Prioritize songs under 5 minutes and avoid duplicates."
+    )
+    try:
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            input=[
+                {"role": "system", "content": instructions},
+                {"role": "user", "content": json.dumps(payload)},
+            ],
+            text={"format": {"type": "json_schema", "name": "song_queries", "schema": schema, "strict": True}},
+            temperature=0.5,
+        )
+        parsed = json.loads(response.output_text.strip())
+        queries = [q.strip() for q in parsed.get("queries", []) if str(q).strip()]
+        return queries[:10]
+    except Exception:
+        fallback = [
+            f"{prompt} official audio",
+            f"{prompt} lyric video",
+            f"{prompt} music video",
+            f"{prompt} radio edit",
+            f"{prompt} short version",
+            f"{prompt} live session",
+        ]
+        return [q.strip() for q in fallback if q.strip()]
+
+
+def search_youtube_track(search_query: str, exclude_video_ids: set[str] | None = None) -> dict | None:
+    youtube_api_key = read_secret("YOUTUBE_API_KEY")
+    if not youtube_api_key:
+        return None
+
+    excluded = exclude_video_ids or set()
+    search_params = {
+        "part": "snippet",
+        "q": search_query,
+        "type": "video",
+        "videoEmbeddable": "true",
+        "videoCategoryId": "10",
+        "maxResults": 10,
+        "safeSearch": "moderate",
+        "key": youtube_api_key,
+    }
+    search_response = requests.get(
+        "https://www.googleapis.com/youtube/v3/search", params=search_params, timeout=12
+    )
+    search_response.raise_for_status()
+    items = search_response.json().get("items", [])
+    if not items:
+        return None
+
+    video_ids = [item.get("id", {}).get("videoId") for item in items]
+    video_ids = [vid for vid in video_ids if vid and vid not in excluded]
+    if not video_ids:
+        return None
+
+    details_response = requests.get(
+        "https://www.googleapis.com/youtube/v3/videos",
+        params={"part": "contentDetails,snippet", "id": ",".join(video_ids), "key": youtube_api_key},
+        timeout=12,
+    )
+    details_response.raise_for_status()
+    details_map = {v["id"]: v for v in details_response.json().get("items", [])}
+
+    for item in items:
+        video_id = item.get("id", {}).get("videoId")
+        if not video_id or video_id in excluded:
+            continue
+        details = details_map.get(video_id, {})
+        duration_seconds = _parse_iso8601_duration_to_seconds(details.get("contentDetails", {}).get("duration", ""))
+        if duration_seconds <= 0 or duration_seconds > 300:
+            continue
+
+        snippet = details.get("snippet") or item.get("snippet", {})
+        title = snippet.get("title", "Unknown title")
+        haystack = f"{title} {snippet.get('description', '')}".lower()
+        if "#shorts" in haystack or "shorts" in haystack:
+            continue
+
+        return {
+            "video_id": video_id,
+            "title": title,
+            "youtube_url": f"https://www.youtube.com/watch?v={video_id}",
+            "channel": snippet.get("channelTitle", "Unknown channel"),
+            "duration_seconds": duration_seconds,
+            "search_query": search_query,
+        }
+    return None
+
+
+def get_all_queued_video_ids() -> set[str]:
+    queued = {song.get("video_id") for song in st.session_state.get("song_queue", []) if song.get("video_id")}
+    current = st.session_state.get("current_song")
+    if current and current.get("video_id"):
+        queued.add(current["video_id"])
+    return queued
+
+
+def refill_song_queue(prompt: str, setting: str | None, energy: str | None, vocals: str | None, force: bool = False) -> tuple[int, str | None]:
+    auto_dj_mode = st.session_state.get("auto_dj_mode", True)
+    if not force and not auto_dj_mode:
+        return 0, None
+
+    now = time.time()
+    last_search = float(st.session_state.get("last_ai_search_time") or 0)
+    queue_len = len(st.session_state.get("song_queue", []))
+    if not force:
+        if queue_len >= 5:
+            return 0, None
+        if now - last_search < 180:
+            return 0, None
+
+    if not read_secret("YOUTUBE_API_KEY"):
+        return 0, "YOUTUBE_API_KEY is missing. Add it in Streamlit secrets to enable queue playback."
+
+    try:
+        song_queries = generate_ai_song_ideas(prompt=prompt, setting=setting, energy=energy, vocals=vocals)
+    except Exception as exc:
+        st.session_state.last_ai_search_time = now
+        return 0, f"AI queue generation failed: {exc}"
+
+    added = 0
+    excluded_ids = get_all_queued_video_ids()
+    queue = st.session_state.song_queue
+    for query in song_queries:
+        if len(queue) >= 5:
+            break
+        try:
+            match = search_youtube_track(query, exclude_video_ids=excluded_ids)
+        except Exception:
+            continue
+        if not match or match["video_id"] in excluded_ids:
+            continue
+        queue.append(match)
+        excluded_ids.add(match["video_id"])
+        added += 1
+
+    st.session_state.last_ai_search_time = now
+    return added, None
+
+
+def advance_queue_if_needed() -> bool:
+    changed = False
+    now = time.time()
+    current_song = st.session_state.get("current_song")
+
+    if current_song:
+        started_at = float(current_song.get("started_at") or now)
+        duration_seconds = int(current_song.get("duration_seconds") or 0)
+        if duration_seconds and now >= started_at + duration_seconds:
+            st.session_state.current_song = None
+            st.session_state.is_playing = False
+            changed = True
+
+    if not st.session_state.get("current_song") and st.session_state.get("song_queue"):
+        next_song = st.session_state.song_queue.pop(0)
+        next_song["started_at"] = now
+        st.session_state.current_song = next_song
+        st.session_state.is_playing = True
+        changed = True
+
+    if not st.session_state.get("current_song") and not st.session_state.get("song_queue"):
+        st.session_state.is_playing = False
+
+    return changed
+
 def search_youtube_music(search_query: str) -> dict | None:
     youtube_api_key = read_secret("YOUTUBE_API_KEY")
     if not youtube_api_key:
@@ -397,18 +602,8 @@ def search_youtube_music(search_query: str) -> dict | None:
 
 def render_ai_music_finder() -> None:
     st.subheader("AI Music Finder")
-    st.caption(
-        "Describe your target vibe and let AI interpret the request, then auto-find an embeddable YouTube track."
-    )
-    selected = st.session_state.get("ai_selected_song")
-    if selected:
-        st.markdown("### Now Playing")
-        render_youtube_audio_player(selected["youtube_url"], selected["title"])
-        st.caption(f"Selected YouTube result: {selected['title']} — {selected['channel']}")
+    st.caption("Auto-DJ can keep a rolling queue of short YouTube songs (<=5 minutes).")
 
-    # Streamlit secrets needed:
-    # OPENAI_API_KEY="..."
-    # YOUTUBE_API_KEY="..."
     with st.container(border=True):
         prompt = st.text_area(
             "Describe the music you want",
@@ -423,26 +618,106 @@ def render_ai_music_finder() -> None:
         with c3:
             vocals = st.selectbox("vocals", [""] + AI_VOCALS_OPTIONS, key="ai_music_vocals")
 
-        if st.button("Find Music", key="find_ai_music", type="primary", use_container_width=True):
-            if not prompt.strip():
-                st.warning("Please describe what kind of music you want.")
-            else:
-                try:
-                    interpretation = analyze_music_prompt(
-                        prompt=prompt.strip(),
-                        setting=setting or None,
-                        energy=energy or None,
-                        vocals=vocals or None,
-                    )
-                    st.session_state.ai_music_interpretation = interpretation
+        st.session_state.auto_dj_mode = st.toggle(
+            "Enable Auto-DJ mode",
+            value=st.session_state.get("auto_dj_mode", True),
+            key="auto_dj_mode_toggle",
+            help="When enabled, AI searches every 3 minutes and keeps up to 5 queued songs.",
+        )
 
-                    youtube_match = search_youtube_music(interpretation["search_query"])
-                    if youtube_match:
-                        st.session_state.ai_selected_song = youtube_match
-                    else:
-                        st.session_state.ai_selected_song = None
-                except Exception as exc:
-                    st.error(f"Sorry, AI Music Finder couldn't process that request right now. ({exc})")
+        b1, b2, _ = st.columns([1, 1, 2])
+        with b1:
+            skip_clicked = st.button("Skip Song", use_container_width=True)
+        with b2:
+            refresh_clicked = st.button("Refresh Queue", use_container_width=True)
+
+    if skip_clicked:
+        st.session_state.current_song = None
+        st.session_state.is_playing = False
+
+    if prompt.strip():
+        try:
+            interpretation = analyze_music_prompt(
+                prompt=prompt.strip(),
+                setting=setting or None,
+                energy=energy or None,
+                vocals=vocals or None,
+            )
+            st.session_state.ai_music_interpretation = interpretation
+        except Exception as exc:
+            st.warning(f"Could not update AI interpretation: {exc}")
+
+    refresh_error = None
+    if refresh_clicked:
+        added, refresh_error = refill_song_queue(
+            prompt=(prompt.strip() or "upbeat background music"),
+            setting=setting or None,
+            energy=energy or None,
+            vocals=vocals or None,
+            force=True,
+        )
+        if added:
+            st.success(f"Added {added} song(s) to queue.")
+
+    auto_error = None
+    if st.session_state.get("auto_dj_mode"):
+        added, auto_error = refill_song_queue(
+            prompt=(prompt.strip() or "focus background music"),
+            setting=setting or None,
+            energy=energy or None,
+            vocals=vocals or None,
+            force=False,
+        )
+        if added:
+            st.info(f"Auto-DJ added {added} new song(s).")
+
+    queue_changed = advance_queue_if_needed()
+    if queue_changed and st.session_state.get("auto_dj_mode"):
+        st.rerun()
+
+    err_msg = refresh_error or auto_error
+    if err_msg:
+        st.warning(err_msg)
+
+    current_song = st.session_state.get("current_song")
+    st.markdown("### Now Playing")
+    if current_song:
+        render_youtube_audio_player(
+            current_song["youtube_url"],
+            f"{current_song['title']} · {current_song['channel']} ({format_duration(current_song['duration_seconds'])})",
+        )
+        started_at = float(current_song.get("started_at") or time.time())
+        remaining = max(0, int(current_song.get("duration_seconds", 0) - (time.time() - started_at)))
+        st.caption(f"Remaining: {format_duration(remaining)}")
+    else:
+        st.info("No song currently playing. Add/refill queue to start playback.")
+
+    st.markdown("### Queue (max 5 songs)")
+    queued_songs = st.session_state.get("song_queue", [])
+    visible = []
+    if current_song:
+        visible.append(
+            {
+                "State": "Now",
+                "Title": current_song["title"],
+                "Channel": current_song["channel"],
+                "Duration": format_duration(current_song["duration_seconds"]),
+            }
+        )
+    for song in queued_songs:
+        visible.append(
+            {
+                "State": "Up next",
+                "Title": song["title"],
+                "Channel": song["channel"],
+                "Duration": format_duration(song["duration_seconds"]),
+            }
+        )
+
+    if visible:
+        st.dataframe(pd.DataFrame(visible[:5]), use_container_width=True, hide_index=True)
+    else:
+        st.caption("Queue is empty.")
 
     interpretation = st.session_state.get("ai_music_interpretation")
     if interpretation:
@@ -457,16 +732,15 @@ def render_ai_music_finder() -> None:
             }
         )
 
-        selected = st.session_state.get("ai_selected_song")
-        if selected:
-            st.success("Now playing is pinned at the top of this section.")
-        elif read_secret("YOUTUBE_API_KEY"):
-            st.info("No embeddable match found from YouTube API results. Try adjusting your prompt.")
-        else:
-            manual_url = fallback_search_query(interpretation["search_query"])
-            st.warning("YOUTUBE_API_KEY not found in Streamlit secrets.")
-            st.write("Open this search URL and pick a video manually:")
-            st.markdown(f"[Open YouTube search results]({manual_url})")
+    if st.session_state.get("auto_dj_mode"):
+        components.html(
+            """
+            <script>
+                setTimeout(() => { window.parent.location.reload(); }, 15000);
+            </script>
+            """,
+            height=0,
+        )
 
 
 def filter_tracks_by_controls(
@@ -943,10 +1217,7 @@ def render_youtube_audio_player(youtube_url: str, title: str | None = None) -> N
     if title:
         st.markdown(f"### Now Playing: {title}")
 
-    embed_url = (
-        f"https://www.youtube.com/embed/{video_id}"
-        "?controls=1&modestbranding=1&rel=0&autoplay=1&mute=1&enablejsapi=1"
-    )
+    embed_url = f"https://www.youtube.com/embed/{video_id}?autoplay=1&enablejsapi=1&controls=1&rel=0"
     html = f"""
     <div style="
         width: 100%;
