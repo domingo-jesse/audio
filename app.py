@@ -211,6 +211,8 @@ def init_state() -> None:
         st.session_state.player_rendered_video_id = None
     if "player_component_html" not in st.session_state:
         st.session_state.player_component_html = None
+    if "initial_queue_bootstrap_done" not in st.session_state:
+        st.session_state.initial_queue_bootstrap_done = False
 
 
 def read_secret(key: str) -> str | None:
@@ -380,6 +382,35 @@ def generate_ai_song_ideas(prompt: str, setting: str | None = None, energy: str 
             f"{prompt} live session",
         ]
         return [q.strip() for q in fallback if q.strip()]
+
+
+def build_autodj_bootstrap_inputs(live: dict) -> tuple[str, str | None, str | None, str | None]:
+    time_of_day = (live.get("time_of_day") or "Any").lower()
+    outcome = (live.get("desired_outcome") or "").lower()
+
+    mood_hint = "balanced"
+    setting = "work"
+    energy = "medium"
+
+    if "calm" in outcome:
+        mood_hint = "calm relaxing"
+        setting = "sleep"
+        energy = "low"
+    elif "social" in outcome or "energy" in outcome:
+        mood_hint = "upbeat social"
+        setting = "restaurant"
+        energy = "high"
+    elif "premium" in outcome:
+        mood_hint = "premium lounge"
+        setting = "restaurant"
+        energy = "medium"
+    elif "focus" in outcome:
+        mood_hint = "focused instrumental"
+        setting = "study"
+        energy = "low"
+
+    prompt = f"{mood_hint} background music for {time_of_day}"
+    return prompt, setting, energy, "instrumental preferred"
 
 
 def search_youtube_track(search_query: str, exclude_video_ids: set[str] | None = None) -> dict | None:
@@ -617,6 +648,10 @@ def render_ai_music_finder() -> None:
     st.subheader("AI Music Finder")
     st.caption("Auto-DJ can keep a rolling queue of short YouTube songs (<=5 minutes).")
 
+    if "ai_music_prompt" not in st.session_state:
+        default_prompt, _, _, _ = build_autodj_bootstrap_inputs(st.session_state.live)
+        st.session_state.ai_music_prompt = default_prompt
+
     with st.container(border=True):
         prompt = st.text_area(
             "Describe the music you want",
@@ -643,6 +678,25 @@ def render_ai_music_finder() -> None:
             skip_clicked = st.button("Skip Song", use_container_width=True)
         with b2:
             refresh_clicked = st.button("Refresh Queue", use_container_width=True)
+
+    startup_error = None
+    if (
+        st.session_state.get("auto_dj_mode", True)
+        and not st.session_state.get("initial_queue_bootstrap_done")
+        and not st.session_state.get("song_queue")
+        and not st.session_state.get("current_song")
+    ):
+        default_prompt, default_setting, default_energy, default_vocals = build_autodj_bootstrap_inputs(st.session_state.live)
+        added, startup_error = refill_song_queue(
+            prompt=(prompt.strip() or default_prompt),
+            setting=setting or default_setting,
+            energy=energy or default_energy,
+            vocals=vocals or default_vocals,
+            force=True,
+        )
+        st.session_state.initial_queue_bootstrap_done = True
+        if added:
+            st.success(f"Auto-start added {added} song(s) based on mood and time of day.")
 
     if skip_clicked:
         st.session_state.current_song = None
@@ -691,7 +745,7 @@ def render_ai_music_finder() -> None:
     if queue_changed and st.session_state.get("auto_dj_mode"):
         st.rerun()
 
-    err_msg = refresh_error or auto_error
+    err_msg = startup_error or refresh_error or auto_error
     if err_msg:
         st.warning(err_msg)
 
