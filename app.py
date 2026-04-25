@@ -691,7 +691,10 @@ def render_youtube_audio_player(youtube_url: str, title: str | None = None) -> N
     if title:
         st.markdown(f"### Now Playing: {title}")
 
-    embed_url = f"https://www.youtube.com/embed/{video_id}?controls=1&modestbranding=1&rel=0"
+    embed_url = (
+        f"https://www.youtube.com/embed/{video_id}"
+        "?controls=1&modestbranding=1&rel=0&autoplay=1&mute=1&enablejsapi=1"
+    )
     html = f"""
     <div style="
         width: 100%;
@@ -714,12 +717,13 @@ def render_youtube_audio_player(youtube_url: str, title: str | None = None) -> N
             background: black;
         ">
             <iframe
+                id="youtube-audio-player"
                 width="100%"
                 height="220"
                 src="{embed_url}"
                 title="YouTube player"
                 frameborder="0"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allow="autoplay"
                 allowfullscreen
                 style="margin-top: -62px;">
             </iframe>
@@ -728,6 +732,23 @@ def render_youtube_audio_player(youtube_url: str, title: str | None = None) -> N
             Audio is played through the official YouTube embedded player.
         </div>
     </div>
+    <script>
+        const playerFrame = document.getElementById("youtube-audio-player");
+        if (playerFrame) {{
+            playerFrame.addEventListener("load", () => {{
+                playerFrame.contentWindow?.postMessage(
+                    JSON.stringify({{ event: "command", func: "playVideo", args: [] }}),
+                    "*"
+                );
+                setTimeout(() => {{
+                    playerFrame.contentWindow?.postMessage(
+                        JSON.stringify({{ event: "command", func: "unMute", args: [] }}),
+                        "*"
+                    );
+                }}, 1500);
+            }});
+        }}
+    </script>
     """
     components.html(html, height=170)
 
