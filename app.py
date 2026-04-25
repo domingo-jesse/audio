@@ -948,39 +948,6 @@ def render_ai_music_finder() -> None:
         st.session_state.last_ai_search_time = time.time()
         st.rerun()
 
-    maybe_finish_current_song()
-    maybe_start_next_song()
-    maybe_refill_queue()
-    maybe_start_next_song()
-
-    current_song = st.session_state.get("current_song")
-    st.markdown("### Now Playing")
-    if current_song:
-        render_youtube_audio_player(
-            current_song.get("video_id", ""),
-            current_song.get("title", "Unknown title"),
-            duration_seconds=int(current_song.get("duration_seconds") or 0),
-        )
-        st.caption(
-            f"{current_song.get('title', 'Unknown title')} · "
-            f"{current_song.get('channel', 'Unknown channel')} · "
-            f"{format_duration(int(current_song.get('duration_seconds') or 0))}"
-        )
-    else:
-        st.info("No song currently playing. Add/refill queue to start playback.")
-
-    st.markdown("### Queue (max 5 songs)")
-    queue = st.session_state.get("song_queue", [])[:MAX_QUEUE_SIZE]
-    if queue:
-        for idx, song in enumerate(queue, start=1):
-            st.write(
-                f"{idx}. {song.get('title', 'Unknown title')} — "
-                f"{song.get('channel', 'Unknown channel')} "
-                f"({format_duration(int(song.get('duration_seconds') or 0))})"
-            )
-    else:
-        st.caption("Queue is empty.")
-
     interpretation = st.session_state.get("ai_music_interpretation")
     if interpretation:
         st.markdown("#### AI interpretation")
@@ -1470,7 +1437,54 @@ def render_youtube_audio_player(video_id: str, title: str = "", duration_seconds
     st.iframe(embed_url, height=170)
 
 
+def run_autodj_cycle() -> None:
+    maybe_finish_current_song()
+    maybe_start_next_song()
+    maybe_refill_queue()
+    maybe_start_next_song()
 
+
+def render_now_playing_and_queue() -> None:
+    run_autodj_cycle()
+
+    st.markdown("### Now Playing (YouTube)")
+    current_song = st.session_state.get("current_song")
+    if current_song:
+        render_youtube_audio_player(
+            current_song.get("video_id", ""),
+            current_song.get("title", "Unknown title"),
+            duration_seconds=int(current_song.get("duration_seconds") or 0),
+        )
+        st.caption(
+            f"{current_song.get('title', 'Unknown title')} · "
+            f"{current_song.get('channel', 'Unknown channel')} · "
+            f"{format_duration(int(current_song.get('duration_seconds') or 0))}"
+        )
+    else:
+        st.info("No song currently playing. Auto-DJ will start once queue has songs.")
+
+    st.markdown("### Queue (live updates, max 5 songs)")
+    queue = st.session_state.get("song_queue", [])[:MAX_QUEUE_SIZE]
+    if queue:
+        for idx, song in enumerate(queue, start=1):
+            st.write(
+                f"{idx}. {song.get('title', 'Unknown title')} — "
+                f"{song.get('channel', 'Unknown channel')} "
+                f"({format_duration(int(song.get('duration_seconds') or 0))})"
+            )
+    else:
+        st.caption("Queue is empty.")
+
+    if st.session_state.get("auto_dj_enabled", True):
+        st.caption("Auto-DJ is active. This panel refreshes every 20 seconds to show queue changes.")
+        st.components.v1.html(
+            """
+            <script>
+            setTimeout(() => window.parent.location.reload(), 20000);
+            </script>
+            """,
+            height=0,
+        )
 
 
 def build_schedule(profile: dict) -> pd.DataFrame:
@@ -1553,7 +1567,7 @@ show_secondary = st.sidebar.toggle("Show secondary workspaces", value=False)
 st.sidebar.caption("Turn this on when you want AI recommendation, library, schedule, analytics, or profile editors.")
 
 if show_secondary:
-    live_tab, rec_tab, library_tab, sched_tab, analytics_tab, profile_tab = st.tabs(
+    live_tab, rec_tab, library_tab, sched_tab, analytics_tab, profile_tab, finder_tab = st.tabs(
         [
             "1) Live Atmosphere Control",
             "2) AI Recommendation",
@@ -1561,11 +1575,12 @@ if show_secondary:
             "4) Schedule Builder",
             "5) Analytics / Experiment Tracker",
             "6) Business Profile (Optional)",
+            "7) AI Music Finder (Hidden)",
         ]
     )
 else:
     live_tab = st.container()
-    rec_tab = library_tab = sched_tab = analytics_tab = profile_tab = None
+    rec_tab = library_tab = sched_tab = analytics_tab = profile_tab = finder_tab = None
 
 if show_secondary and profile_tab is not None:
     with profile_tab:
@@ -1602,15 +1617,9 @@ if show_secondary and profile_tab is not None:
 
 with live_tab:
     st.subheader("Live Atmosphere Control")
-
-    current_atmosphere, atmosphere_issue = atmosphere_snapshot(st.session_state.live)
-    time_context = time_context_label(st.session_state.live["time_of_day"])
+    render_now_playing_and_queue()
 
     with st.container(border=True):
-        st.markdown(f"### Current Atmosphere: **{current_atmosphere}** ({atmosphere_issue})")
-        st.write(f"**Time of day:** {time_context}")
-        st.write("**System Status:** Monitoring noise and conversation levels")
-
         auto_pressed = st.button("Let Whisper Handle This", type="primary", use_container_width=True)
         if auto_pressed:
             st.session_state.live["autopilot_enabled"] = True
@@ -1693,7 +1702,15 @@ with live_tab:
         st.caption(f"{len(filtered_preview)} track(s) match current live filters.")
 
     st.divider()
-    render_ai_music_finder()
+    current_atmosphere, atmosphere_issue = atmosphere_snapshot(st.session_state.live)
+    time_context = time_context_label(st.session_state.live["time_of_day"])
+    st.markdown(f"### Current Atmosphere: **{current_atmosphere}** ({atmosphere_issue})")
+    st.write(f"**Time of day:** {time_context}")
+    st.write("**System Status:** Monitoring noise and conversation levels")
+
+if show_secondary and finder_tab is not None:
+    with finder_tab:
+        render_ai_music_finder()
 
 if show_secondary and rec_tab is not None:
     with rec_tab:
