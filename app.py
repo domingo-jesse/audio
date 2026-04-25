@@ -664,6 +664,51 @@ def build_schedule(profile: dict) -> pd.DataFrame:
 
 init_state()
 
+st.markdown(
+    """
+    <style>
+        .stApp {
+            background: radial-gradient(circle at top left, #1e1b4b 0%, #0f172a 45%, #020617 100%);
+        }
+        .block-container {
+            padding-top: 1.4rem;
+            max-width: 1320px;
+        }
+        .whisper-shell {
+            background: rgba(15, 23, 42, 0.78);
+            border: 1px solid rgba(148, 163, 184, 0.28);
+            border-radius: 18px;
+            padding: 1rem 1.1rem;
+            box-shadow: 0 18px 45px rgba(2, 6, 23, 0.45);
+            backdrop-filter: blur(6px);
+        }
+        .whisper-hero {
+            background: linear-gradient(120deg, rgba(79, 70, 229, 0.25), rgba(14, 116, 144, 0.2));
+            border: 1px solid rgba(129, 140, 248, 0.35);
+            border-radius: 16px;
+            padding: 1.2rem;
+            margin-bottom: 0.9rem;
+        }
+        .whisper-kicker {
+            font-size: 0.86rem;
+            letter-spacing: 0.02em;
+            color: #cbd5e1;
+        }
+        .whisper-title {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: #e2e8f0;
+            margin: 0.25rem 0;
+        }
+        .whisper-sub {
+            color: #bfdbfe;
+            margin: 0;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.title("🎵 Whisper")
 st.caption(
     "Whisper helps operators identify atmosphere problems and automatically guide the room toward the right experience."
@@ -672,50 +717,70 @@ st.caption(
 st.info(
     "Legal note: This MVP intentionally does not include Spotify playback. Public business playback typically requires licensed business music providers."
 )
-st.caption("Business profile is optional right now. You can start with Live Atmosphere Control using smart defaults.")
-
-live_tab, rec_tab, library_tab, sched_tab, analytics_tab, profile_tab = st.tabs(
-    [
-        "1) Live Atmosphere Control",
-        "2) AI Recommendation",
-        "3) Music Library",
-        "4) Schedule Builder",
-        "5) Analytics / Experiment Tracker",
-        "6) Business Profile (Optional)",
-    ]
+st.markdown(
+    """
+    <div class="whisper-shell">
+        <div class="whisper-hero">
+            <p class="whisper-kicker">Primary Workspace</p>
+            <p class="whisper-title">Live Atmosphere Control</p>
+            <p class="whisper-sub">The app now opens in focus mode so this is the primary view. Secondary tools are tucked away in the sidebar.</p>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
+st.caption("Business profile is optional right now. You can start here with smart defaults.")
 
-with profile_tab:
-    st.subheader("Set your business profile")
-    with st.container(border=True):
-        c1, c2 = st.columns(2)
-        with c1:
-            st.session_state.profile["business_name"] = st.text_input(
-                "Business name", value=st.session_state.profile["business_name"]
-            )
-            st.session_state.profile["business_type"] = st.selectbox(
-                "Business type",
-                BUSINESS_TYPES,
-                index=BUSINESS_TYPES.index(st.session_state.profile["business_type"]),
-            )
-            st.session_state.profile["brand_vibe"] = st.selectbox(
-                "Brand vibe",
-                BRAND_VIBES,
-                index=BRAND_VIBES.index(st.session_state.profile["brand_vibe"]),
-            )
-        with c2:
-            st.session_state.profile["target_customer"] = st.selectbox(
-                "Target customer",
-                TARGET_CUSTOMERS,
-                index=TARGET_CUSTOMERS.index(st.session_state.profile["target_customer"]),
-            )
-            st.session_state.profile["default_goal"] = st.selectbox(
-                "Default business goal",
-                BUSINESS_GOALS,
-                index=BUSINESS_GOALS.index(st.session_state.profile["default_goal"]),
-            )
+show_secondary = st.sidebar.toggle("Show secondary workspaces", value=False)
+st.sidebar.caption("Turn this on when you want AI recommendation, library, schedule, analytics, or profile editors.")
 
-    st.success("Profile saved in this session. These fields are optional for MVP use.")
+if show_secondary:
+    live_tab, rec_tab, library_tab, sched_tab, analytics_tab, profile_tab = st.tabs(
+        [
+            "1) Live Atmosphere Control",
+            "2) AI Recommendation",
+            "3) Music Library",
+            "4) Schedule Builder",
+            "5) Analytics / Experiment Tracker",
+            "6) Business Profile (Optional)",
+        ]
+    )
+else:
+    live_tab = st.container()
+    rec_tab = library_tab = sched_tab = analytics_tab = profile_tab = None
+
+if show_secondary and profile_tab is not None:
+    with profile_tab:
+        st.subheader("Set your business profile")
+        with st.container(border=True):
+            c1, c2 = st.columns(2)
+            with c1:
+                st.session_state.profile["business_name"] = st.text_input(
+                    "Business name", value=st.session_state.profile["business_name"]
+                )
+                st.session_state.profile["business_type"] = st.selectbox(
+                    "Business type",
+                    BUSINESS_TYPES,
+                    index=BUSINESS_TYPES.index(st.session_state.profile["business_type"]),
+                )
+                st.session_state.profile["brand_vibe"] = st.selectbox(
+                    "Brand vibe",
+                    BRAND_VIBES,
+                    index=BRAND_VIBES.index(st.session_state.profile["brand_vibe"]),
+                )
+            with c2:
+                st.session_state.profile["target_customer"] = st.selectbox(
+                    "Target customer",
+                    TARGET_CUSTOMERS,
+                    index=TARGET_CUSTOMERS.index(st.session_state.profile["target_customer"]),
+                )
+                st.session_state.profile["default_goal"] = st.selectbox(
+                    "Default business goal",
+                    BUSINESS_GOALS,
+                    index=BUSINESS_GOALS.index(st.session_state.profile["default_goal"]),
+                )
+
+        st.success("Profile saved in this session. These fields are optional for MVP use.")
 
 with live_tab:
     st.subheader("Live Atmosphere Control")
@@ -809,195 +874,199 @@ with live_tab:
         )
         st.caption(f"{len(filtered_preview)} track(s) match current live filters.")
 
-with rec_tab:
-    st.subheader("Recommendation engine")
-    base_rec = rule_based_recommendation(st.session_state.profile, st.session_state.live)
-    llm_rec = llm_recommendation(st.session_state.profile, st.session_state.live)
+if show_secondary and rec_tab is not None:
+    with rec_tab:
+        st.subheader("Recommendation engine")
+        base_rec = rule_based_recommendation(st.session_state.profile, st.session_state.live)
+        llm_rec = llm_recommendation(st.session_state.profile, st.session_state.live)
 
-    rec = llm_rec if llm_rec else base_rec
-    mode = "OpenAI-customized" if llm_rec else "Rule-based"
-    st.caption(f"Mode: **{mode}**")
+        rec = llm_rec if llm_rec else base_rec
+        mode = "OpenAI-customized" if llm_rec else "Rule-based"
+        st.caption(f"Mode: **{mode}**")
 
-    card1, card2 = st.columns([1.3, 1])
-    with card1:
-        with st.container(border=True):
-            st.markdown(f"### {rec['recommended_mood']}")
-            st.write(f"**Genres:** {', '.join(rec['genres'])}")
-            st.write(f"**Tempo:** {rec['tempo_bpm']} BPM")
-            st.write(f"**Playlist concept:** {rec['playlist_concept']}")
-            st.write(f"**Why this fits:** {rec['reasoning']}")
-            st.write(f"**Goal alignment:** {rec['business_goal_alignment']}")
+        card1, card2 = st.columns([1.3, 1])
+        with card1:
+            with st.container(border=True):
+                st.markdown(f"### {rec['recommended_mood']}")
+                st.write(f"**Genres:** {', '.join(rec['genres'])}")
+                st.write(f"**Tempo:** {rec['tempo_bpm']} BPM")
+                st.write(f"**Playlist concept:** {rec['playlist_concept']}")
+                st.write(f"**Why this fits:** {rec['reasoning']}")
+                st.write(f"**Goal alignment:** {rec['business_goal_alignment']}")
 
-            if rec.get("risks"):
-                st.warning("Risk flags")
-                for r in rec["risks"]:
-                    st.write(f"- {r}")
-            else:
-                st.success("No obvious risk mismatch detected for current volume/crowd/noise.")
-
-    with card2:
-        with st.container(border=True):
-            bpm_mid = bpm_midpoint(rec["tempo_bpm"])
-            volume_level = rec["volume"].lower()
-            volume_map = {"low": 30, "moderate-low": 40, "moderate": 55, "moderate-high": 65, "high": 75}
-            energy_map = {"low": 30, "low-medium": 45, "medium": 55, "medium-high": 70, "high": 82}
-            st.metric("BPM target (midpoint)", f"{bpm_mid}")
-            st.metric("Recommended volume index", f"{volume_map.get(volume_level, 50)}/100")
-            st.metric("Recommended energy index", f"{energy_map.get(rec['energy'].lower(), 50)}/100")
-
-    track_result = recommend_track(
-        tracks=st.session_state.music_library,
-        business_type=st.session_state.profile["business_type"],
-        time_of_day=st.session_state.live["time_of_day"],
-        desired_goal=st.session_state.profile["default_goal"],
-        desired_moods=st.session_state.music_filters["desired_moods"],
-        min_bpm=st.session_state.music_filters["min_bpm"],
-        max_bpm=st.session_state.music_filters["max_bpm"],
-        crowd_level=st.session_state.live["crowd_level"],
-        noise_level=st.session_state.live["noise_level"],
-    )
-
-    st.markdown("### Suggested Track from Your Music Library")
-    with st.container(border=True):
-        if track_result is None:
-            st.warning(
-                "No matching tracks found. Try widening the BPM range, selecting fewer moods, or adding more tracks."
-            )
-        else:
-            selected = track_result["track"]
-            st.write(f"**{selected['title']}** — {selected['artist']}")
-            st.write(f"Genre: {selected['genre']} | BPM: {selected['bpm']} | Energy: {selected['energy']}/100")
-            st.write(
-                f"Best fit: {selected['best_time_of_day']} / {selected['best_business_type']} | License: {selected['license_status']}"
-            )
-            st.success(f"Match score: {track_result['score']}")
-            st.markdown("**Why this was selected**")
-            for reason in track_result["reasons"]:
-                st.write(f"- {reason}")
-
-            file_path = selected["file_path"].strip()
-            if file_path and os.path.exists(file_path):
-                st.audio(file_path)
-            else:
-                st.caption("Audio preview unavailable. Add a valid local MP3 file path.")
-
-    st.markdown("### AI Adjustment Copilot")
-    st.caption("A quick execution plan so the AI handles most of the moment-to-moment music adjustments.")
-    actions = build_adjustment_actions(rec, st.session_state.live)
-    with st.container(border=True):
-        for idx, step in enumerate(actions, start=1):
-            st.markdown(f"**{idx}. {step['action']}**  \nPriority: `{step['priority']}`  \n{step['how']}")
-
-with library_tab:
-    st.subheader("Music Library")
-    with st.container(border=True):
-        with st.form("add_track_form", clear_on_submit=True):
-            c1, c2 = st.columns(2)
-            with c1:
-                track_title = st.text_input("Track title")
-                artist = st.text_input("Artist")
-                file_path = st.text_input("File path or URL")
-                bpm = st.number_input("BPM", min_value=40, max_value=220, value=95, step=1)
-                mood_tags = st.multiselect("Mood tags", options=LIBRARY_MOODS, default=["Calm"])
-            with c2:
-                genre = st.text_input("Genre", value="Ambient")
-                energy = st.slider("Energy level", 0, 100, value=50)
-                best_time = st.selectbox("Best time of day", options=TIME_OF_DAY_OPTIONS, index=5)
-                best_business = st.selectbox("Best business type", options=BUSINESS_TYPE_OPTIONS, index=0)
-                license_status = st.selectbox("License status", options=LICENSE_OPTIONS, index=0)
-
-            add_track = st.form_submit_button("Add track", type="primary")
-            if add_track:
-                if not track_title.strip():
-                    st.error("Track title is required.")
+                if rec.get("risks"):
+                    st.warning("Risk flags")
+                    for r in rec["risks"]:
+                        st.write(f"- {r}")
                 else:
-                    st.session_state.music_library.append(
-                        {
-                            "title": track_title.strip(),
-                            "artist": artist.strip() or "Unknown Artist",
-                            "file_path": file_path.strip(),
-                            "bpm": int(bpm),
-                            "mood_tags": mood_tags,
-                            "genre": genre.strip() or "Unknown",
-                            "energy": energy,
-                            "best_time_of_day": best_time,
-                            "best_business_type": best_business,
-                            "license_status": license_status,
-                        }
-                    )
-                    st.success("Track added to session library.")
+                    st.success("No obvious risk mismatch detected for current volume/crowd/noise.")
 
-    library_df = pd.DataFrame(st.session_state.music_library)
-    if library_df.empty:
-        st.info("No tracks in the library yet.")
-    else:
-        show_df = library_df.copy()
-        show_df["mood_tags"] = show_df["mood_tags"].apply(lambda vals: ", ".join(vals))
-        st.dataframe(show_df, use_container_width=True, hide_index=True)
+        with card2:
+            with st.container(border=True):
+                bpm_mid = bpm_midpoint(rec["tempo_bpm"])
+                volume_level = rec["volume"].lower()
+                volume_map = {"low": 30, "moderate-low": 40, "moderate": 55, "moderate-high": 65, "high": 75}
+                energy_map = {"low": 30, "low-medium": 45, "medium": 55, "medium-high": 70, "high": 82}
+                st.metric("BPM target (midpoint)", f"{bpm_mid}")
+                st.metric("Recommended volume index", f"{volume_map.get(volume_level, 50)}/100")
+                st.metric("Recommended energy index", f"{energy_map.get(rec['energy'].lower(), 50)}/100")
 
-with sched_tab:
-    st.subheader("Daily schedule builder")
-    with st.container(border=True):
-        if st.button("Generate sample daily schedule", type="primary"):
-            st.session_state.generated_schedule = build_schedule(st.session_state.profile)
-
-        schedule_df = st.session_state.get("generated_schedule", build_schedule(st.session_state.profile))
-        st.dataframe(schedule_df, use_container_width=True, hide_index=True)
-
-with analytics_tab:
-    st.subheader("Experiment tracker")
-    with st.container(border=True):
-        with st.form("analytics_form", clear_on_submit=True):
-            a1, a2, a3 = st.columns(3)
-            with a1:
-                entry_date = st.date_input("Date", value=date.today())
-                time_block = st.selectbox("Time block", ["Morning", "Lunch", "Afternoon", "Evening", "Late Night"])
-                music_mood = st.text_input("Music mood used", value=base_rec["recommended_mood"])
-            with a2:
-                dwell = st.number_input("Average dwell time (minutes)", min_value=0.0, value=45.0, step=1.0)
-                sales = st.number_input("Sales estimate ($)", min_value=0.0, value=1200.0, step=50.0)
-                tips = st.number_input("Tips estimate ($)", min_value=0.0, value=140.0, step=10.0)
-            with a3:
-                customer_notes = st.text_area("Customer mood notes", value="")
-                staff_notes = st.text_area("Staff notes", value="")
-
-            submitted = st.form_submit_button("Add experiment row")
-            if submitted:
-                st.session_state.analytics.append(
-                    {
-                        "Date": str(entry_date),
-                        "Time block": time_block,
-                        "Music mood used": music_mood,
-                        "Average dwell time": dwell,
-                        "Sales estimate": sales,
-                        "Tips estimate": tips,
-                        "Customer mood notes": customer_notes,
-                        "Staff notes": staff_notes,
-                    }
-                )
-                st.success("Experiment row added.")
-
-    analytics_df = pd.DataFrame(st.session_state.analytics)
-    if analytics_df.empty:
-        st.info("No experiment data yet. Add a few rows to unlock charts.")
-    else:
-        st.dataframe(analytics_df, use_container_width=True, hide_index=True)
-
-        mood_group = analytics_df.groupby("Music mood used", as_index=False).agg(
-            {
-                "Average dwell time": "mean",
-                "Sales estimate": "mean",
-                "Tips estimate": "mean",
-            }
+        track_result = recommend_track(
+            tracks=st.session_state.music_library,
+            business_type=st.session_state.profile["business_type"],
+            time_of_day=st.session_state.live["time_of_day"],
+            desired_goal=st.session_state.profile["default_goal"],
+            desired_moods=st.session_state.music_filters["desired_moods"],
+            min_bpm=st.session_state.music_filters["min_bpm"],
+            max_bpm=st.session_state.music_filters["max_bpm"],
+            crowd_level=st.session_state.live["crowd_level"],
+            noise_level=st.session_state.live["noise_level"],
         )
 
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            fig1 = px.bar(mood_group, x="Music mood used", y="Average dwell time", title="Dwell time by music mood")
-            st.plotly_chart(fig1, use_container_width=True)
-        with c2:
-            fig2 = px.bar(mood_group, x="Music mood used", y="Sales estimate", title="Sales estimate by music mood")
-            st.plotly_chart(fig2, use_container_width=True)
-        with c3:
-            fig3 = px.bar(mood_group, x="Music mood used", y="Tips estimate", title="Tips estimate by music mood")
-            st.plotly_chart(fig3, use_container_width=True)
+        st.markdown("### Suggested Track from Your Music Library")
+        with st.container(border=True):
+            if track_result is None:
+                st.warning(
+                    "No matching tracks found. Try widening the BPM range, selecting fewer moods, or adding more tracks."
+                )
+            else:
+                selected = track_result["track"]
+                st.write(f"**{selected['title']}** — {selected['artist']}")
+                st.write(f"Genre: {selected['genre']} | BPM: {selected['bpm']} | Energy: {selected['energy']}/100")
+                st.write(
+                    f"Best fit: {selected['best_time_of_day']} / {selected['best_business_type']} | License: {selected['license_status']}"
+                )
+                st.success(f"Match score: {track_result['score']}")
+                st.markdown("**Why this was selected**")
+                for reason in track_result["reasons"]:
+                    st.write(f"- {reason}")
+
+                file_path = selected["file_path"].strip()
+                if file_path and os.path.exists(file_path):
+                    st.audio(file_path)
+                else:
+                    st.caption("Audio preview unavailable. Add a valid local MP3 file path.")
+
+        st.markdown("### AI Adjustment Copilot")
+        st.caption("A quick execution plan so the AI handles most of the moment-to-moment music adjustments.")
+        actions = build_adjustment_actions(rec, st.session_state.live)
+        with st.container(border=True):
+            for idx, step in enumerate(actions, start=1):
+                st.markdown(f"**{idx}. {step['action']}**  \nPriority: `{step['priority']}`  \n{step['how']}")
+
+if show_secondary and library_tab is not None:
+    with library_tab:
+        st.subheader("Music Library")
+        with st.container(border=True):
+            with st.form("add_track_form", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+                with c1:
+                    track_title = st.text_input("Track title")
+                    artist = st.text_input("Artist")
+                    file_path = st.text_input("File path or URL")
+                    bpm = st.number_input("BPM", min_value=40, max_value=220, value=95, step=1)
+                    mood_tags = st.multiselect("Mood tags", options=LIBRARY_MOODS, default=["Calm"])
+                with c2:
+                    genre = st.text_input("Genre", value="Ambient")
+                    energy = st.slider("Energy level", 0, 100, value=50)
+                    best_time = st.selectbox("Best time of day", options=TIME_OF_DAY_OPTIONS, index=5)
+                    best_business = st.selectbox("Best business type", options=BUSINESS_TYPE_OPTIONS, index=0)
+                    license_status = st.selectbox("License status", options=LICENSE_OPTIONS, index=0)
+
+                add_track = st.form_submit_button("Add track", type="primary")
+                if add_track:
+                    if not track_title.strip():
+                        st.error("Track title is required.")
+                    else:
+                        st.session_state.music_library.append(
+                            {
+                                "title": track_title.strip(),
+                                "artist": artist.strip() or "Unknown Artist",
+                                "file_path": file_path.strip(),
+                                "bpm": int(bpm),
+                                "mood_tags": mood_tags,
+                                "genre": genre.strip() or "Unknown",
+                                "energy": energy,
+                                "best_time_of_day": best_time,
+                                "best_business_type": best_business,
+                                "license_status": license_status,
+                            }
+                        )
+                        st.success("Track added to session library.")
+
+        library_df = pd.DataFrame(st.session_state.music_library)
+        if library_df.empty:
+            st.info("No tracks in the library yet.")
+        else:
+            show_df = library_df.copy()
+            show_df["mood_tags"] = show_df["mood_tags"].apply(lambda vals: ", ".join(vals))
+            st.dataframe(show_df, use_container_width=True, hide_index=True)
+
+if show_secondary and sched_tab is not None:
+    with sched_tab:
+        st.subheader("Daily schedule builder")
+        with st.container(border=True):
+            if st.button("Generate sample daily schedule", type="primary"):
+                st.session_state.generated_schedule = build_schedule(st.session_state.profile)
+
+            schedule_df = st.session_state.get("generated_schedule", build_schedule(st.session_state.profile))
+            st.dataframe(schedule_df, use_container_width=True, hide_index=True)
+
+if show_secondary and analytics_tab is not None:
+    with analytics_tab:
+        st.subheader("Experiment tracker")
+        with st.container(border=True):
+            with st.form("analytics_form", clear_on_submit=True):
+                a1, a2, a3 = st.columns(3)
+                with a1:
+                    entry_date = st.date_input("Date", value=date.today())
+                    time_block = st.selectbox("Time block", ["Morning", "Lunch", "Afternoon", "Evening", "Late Night"])
+                    music_mood = st.text_input("Music mood used", value=base_rec["recommended_mood"])
+                with a2:
+                    dwell = st.number_input("Average dwell time (minutes)", min_value=0.0, value=45.0, step=1.0)
+                    sales = st.number_input("Sales estimate ($)", min_value=0.0, value=1200.0, step=50.0)
+                    tips = st.number_input("Tips estimate ($)", min_value=0.0, value=140.0, step=10.0)
+                with a3:
+                    customer_notes = st.text_area("Customer mood notes", value="")
+                    staff_notes = st.text_area("Staff notes", value="")
+
+                submitted = st.form_submit_button("Add experiment row")
+                if submitted:
+                    st.session_state.analytics.append(
+                        {
+                            "Date": str(entry_date),
+                            "Time block": time_block,
+                            "Music mood used": music_mood,
+                            "Average dwell time": dwell,
+                            "Sales estimate": sales,
+                            "Tips estimate": tips,
+                            "Customer mood notes": customer_notes,
+                            "Staff notes": staff_notes,
+                        }
+                    )
+                    st.success("Experiment row added.")
+
+        analytics_df = pd.DataFrame(st.session_state.analytics)
+        if analytics_df.empty:
+            st.info("No experiment data yet. Add a few rows to unlock charts.")
+        else:
+            st.dataframe(analytics_df, use_container_width=True, hide_index=True)
+
+            mood_group = analytics_df.groupby("Music mood used", as_index=False).agg(
+                {
+                    "Average dwell time": "mean",
+                    "Sales estimate": "mean",
+                    "Tips estimate": "mean",
+                }
+            )
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                fig1 = px.bar(mood_group, x="Music mood used", y="Average dwell time", title="Dwell time by music mood")
+                st.plotly_chart(fig1, use_container_width=True)
+            with c2:
+                fig2 = px.bar(mood_group, x="Music mood used", y="Sales estimate", title="Sales estimate by music mood")
+                st.plotly_chart(fig2, use_container_width=True)
+            with c3:
+                fig3 = px.bar(mood_group, x="Music mood used", y="Tips estimate", title="Tips estimate by music mood")
+                st.plotly_chart(fig3, use_container_width=True)
