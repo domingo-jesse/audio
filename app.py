@@ -668,41 +668,73 @@ st.markdown(
     """
     <style>
         .stApp {
-            background: radial-gradient(circle at top left, #1e1b4b 0%, #0f172a 45%, #020617 100%);
+            background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 45%, #f8fafc 100%);
+            color: #0f172a;
         }
         .block-container {
-            padding-top: 1.4rem;
-            max-width: 1320px;
+            padding-top: 1.1rem;
+            max-width: 1120px;
         }
         .whisper-shell {
-            background: rgba(15, 23, 42, 0.78);
-            border: 1px solid rgba(148, 163, 184, 0.28);
-            border-radius: 18px;
-            padding: 1rem 1.1rem;
-            box-shadow: 0 18px 45px rgba(2, 6, 23, 0.45);
-            backdrop-filter: blur(6px);
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 16px;
+            padding: 1.1rem 1.2rem;
+            box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
         }
         .whisper-hero {
-            background: linear-gradient(120deg, rgba(79, 70, 229, 0.25), rgba(14, 116, 144, 0.2));
-            border: 1px solid rgba(129, 140, 248, 0.35);
-            border-radius: 16px;
-            padding: 1.2rem;
+            background: linear-gradient(120deg, #eef2ff, #ecfeff);
+            border: 1px solid #c7d2fe;
+            border-radius: 14px;
+            padding: 1rem 1.1rem;
             margin-bottom: 0.9rem;
         }
         .whisper-kicker {
             font-size: 0.86rem;
             letter-spacing: 0.02em;
-            color: #cbd5e1;
+            color: #334155;
+            margin-bottom: 0.2rem;
         }
         .whisper-title {
-            font-size: 1.8rem;
+            font-size: 1.65rem;
             font-weight: 700;
-            color: #e2e8f0;
-            margin: 0.25rem 0;
+            color: #1e293b;
+            margin: 0.15rem 0;
         }
         .whisper-sub {
-            color: #bfdbfe;
+            color: #334155;
             margin: 0;
+        }
+        .stAlert {
+            border-radius: 12px;
+        }
+        [data-testid="stSidebar"] {
+            background: #f8fafc;
+            border-right: 1px solid #e2e8f0;
+        }
+        div[data-testid="stVerticalBlock"] > div:has(> div[data-testid="stMetric"]) {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 0.35rem 0.55rem;
+        }
+        .stButton > button {
+            background: linear-gradient(120deg, #2563eb, #4f46e5);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-weight: 600;
+        }
+        .stButton > button:hover {
+            filter: brightness(1.05);
+        }
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 0.3rem;
+        }
+        .stTabs [data-baseweb="tab"] {
+            background: #e2e8f0;
+            border-radius: 999px;
+            padding: 0.35rem 0.8rem;
         }
     </style>
     """,
