@@ -810,11 +810,8 @@ st.markdown(
             color: #0f172a;
         }
         .block-container {
-            padding-top: 0.4rem !important;
+            padding-top: 1.1rem;
             max-width: 1120px;
-        }
-        [data-testid="stAppViewBlockContainer"] {
-            padding-top: 0.4rem !important;
         }
         .whisper-shell {
             background: #ffffff;
