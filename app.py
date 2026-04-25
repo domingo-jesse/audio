@@ -67,6 +67,14 @@ QUEUE_REFILL_THRESHOLD = 2
 MAX_SONG_DURATION_SECONDS = 300
 MAX_YOUTUBE_SEARCHES_PER_DAY = 25
 FALLBACK_SONGS_PATH = "songs_fallback.csv"
+OUTCOME_TO_BOOTSTRAP_MOOD = {
+    "Calm people down": "calm",
+    "Keep people longer": "cozy",
+    "Move people faster": "upbeat",
+    "Make space feel premium": "premium",
+    "Increase social energy": "social",
+    "Improve focus": "focused",
+}
 
 
 class YouTubeQuotaExceededError(Exception):
@@ -452,6 +460,13 @@ def build_autodj_bootstrap_inputs(live: dict) -> tuple[str, str | None, str | No
     return prompt, setting, energy, "instrumental preferred"
 
 
+def infer_bootstrap_mood(live: dict) -> str:
+    desired_outcome = str(live.get("desired_outcome", "")).strip()
+    if desired_outcome in OUTCOME_TO_BOOTSTRAP_MOOD:
+        return OUTCOME_TO_BOOTSTRAP_MOOD[desired_outcome]
+    return "focused"
+
+
 @st.cache_data(ttl=86400)
 def search_youtube_cached(query: str) -> list:
     youtube_api_key = read_secret("YOUTUBE_API_KEY")
@@ -765,6 +780,26 @@ def fill_queue_if_needed(prompt: str, mood: str) -> tuple[int, str | None]:
     if added < needed:
         added += fill_queue_from_fallback(mood=mood)
     return added, None
+
+
+def bootstrap_queue_on_load() -> None:
+    if st.session_state.get("initial_queue_bootstrap_done"):
+        return
+
+    prompt, setting, energy, vocals = build_autodj_bootstrap_inputs(st.session_state.live)
+    mood = infer_bootstrap_mood(st.session_state.live)
+
+    st.session_state.ai_music_prompt = prompt
+    st.session_state.ai_music_setting = setting or ""
+    st.session_state.ai_music_energy = energy or ""
+    st.session_state.ai_music_vocals = vocals or ""
+
+    added, _ = fill_queue_if_needed(prompt=prompt, mood=mood)
+    if added < MAX_QUEUE_SIZE:
+        fill_queue_from_fallback(mood=mood)
+
+    advance_queue_if_needed()
+    st.session_state.initial_queue_bootstrap_done = True
 
 
 def advance_queue_if_needed() -> bool:
@@ -1433,8 +1468,8 @@ def render_youtube_audio_player(video_id: str, title: str = "", duration_seconds
         st.error("Missing YouTube video ID for player rendering.")
         return
 
-    embed_url = f"https://www.youtube.com/embed/{video_id}?autoplay=1&enablejsapi=1"
-    st.iframe(embed_url, height=170)
+    embed_url = f"https://www.youtube.com/embed/{video_id}?autoplay=1&enablejsapi=1&rel=0"
+    st.iframe(embed_url, height=240)
 
 
 def run_autodj_cycle() -> None:
@@ -1476,15 +1511,19 @@ def render_now_playing_and_queue() -> None:
         st.caption("Queue is empty.")
 
     if st.session_state.get("auto_dj_enabled", True):
-        st.caption("Auto-DJ is active. This panel refreshes every 20 seconds to show queue changes.")
-        st.components.v1.html(
-            """
-            <script>
-            setTimeout(() => window.parent.location.reload(), 20000);
-            </script>
-            """,
-            height=0,
-        )
+        st.caption("Auto-DJ is active. This panel auto-updates every 20 seconds without full-page reload.")
+
+
+if hasattr(st, "fragment"):
+
+    @st.fragment(run_every="20s")
+    def render_now_playing_and_queue_live() -> None:
+        render_now_playing_and_queue()
+
+else:
+
+    def render_now_playing_and_queue_live() -> None:
+        render_now_playing_and_queue()
 
 
 def build_schedule(profile: dict) -> pd.DataFrame:
@@ -1513,6 +1552,7 @@ def build_schedule(profile: dict) -> pd.DataFrame:
 
 
 init_state()
+bootstrap_queue_on_load()
 
 st.markdown(
     """
@@ -1617,7 +1657,7 @@ if show_secondary and profile_tab is not None:
 
 with live_tab:
     st.subheader("Live Atmosphere Control")
-    render_now_playing_and_queue()
+    render_now_playing_and_queue_live()
 
     with st.container(border=True):
         auto_pressed = st.button("Let Whisper Handle This", type="primary", use_container_width=True)
