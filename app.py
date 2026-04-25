@@ -637,6 +637,44 @@ def transition_plan(live: dict) -> list[str]:
     steps.append("Re-scoring atmosphere every 15 minutes to keep conditions aligned.")
     return steps
 
+
+def playable_path(track: dict) -> str:
+    raw_path = track.get("file_path", "").strip()
+    if not raw_path:
+        return ""
+    if raw_path.startswith(("http://", "https://")):
+        return raw_path
+    return raw_path if os.path.exists(raw_path) else ""
+
+
+def render_music_player(tracks: list[dict]) -> None:
+    st.markdown("### In-App Music Player")
+    st.caption("Play a track directly in Whisper using a local file path or a public audio URL from your library.")
+
+    if not tracks:
+        st.info("No tracks available yet. Add tracks in Music Library.")
+        return
+
+    labels = [f"{track['title']} — {track['artist']}" for track in tracks]
+    selected_label = st.selectbox("Choose a track to play", labels, key="player_selected_track")
+    selected_idx = labels.index(selected_label)
+    selected_track = tracks[selected_idx]
+
+    with st.container(border=True):
+        st.write(
+            f"**Now selected:** {selected_track['title']} — {selected_track['artist']} | "
+            f"BPM: {selected_track['bpm']} | Energy: {selected_track['energy']}/100"
+        )
+        audio_path = playable_path(selected_track)
+        if audio_path:
+            st.audio(audio_path)
+        else:
+            st.warning(
+                "This track does not have a playable source yet. "
+                "Add a valid local file path or public URL in the Music Library tab."
+            )
+
+
 def build_schedule(profile: dict) -> pd.DataFrame:
     rows = []
     for block in ["Morning", "Lunch", "Afternoon", "Evening", "Late Night"]:
@@ -905,6 +943,8 @@ with live_tab:
             allow_unknown_license=True,
         )
         st.caption(f"{len(filtered_preview)} track(s) match current live filters.")
+
+    render_music_player(st.session_state.music_library)
 
 if show_secondary and rec_tab is not None:
     with rec_tab:
