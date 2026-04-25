@@ -400,6 +400,12 @@ def render_ai_music_finder() -> None:
     st.caption(
         "Describe your target vibe and let AI interpret the request, then auto-find an embeddable YouTube track."
     )
+    selected = st.session_state.get("ai_selected_song")
+    if selected:
+        st.markdown("### Now Playing")
+        render_youtube_audio_player(selected["youtube_url"], selected["title"])
+        st.caption(f"Selected YouTube result: {selected['title']} — {selected['channel']}")
+
     # Streamlit secrets needed:
     # OPENAI_API_KEY="..."
     # YOUTUBE_API_KEY="..."
@@ -453,8 +459,7 @@ def render_ai_music_finder() -> None:
 
         selected = st.session_state.get("ai_selected_song")
         if selected:
-            st.success(f"Selected YouTube result: {selected['title']} — {selected['channel']}")
-            render_youtube_audio_player(selected["youtube_url"], selected["title"])
+            st.success("Now playing is pinned at the top of this section.")
         elif read_secret("YOUTUBE_API_KEY"):
             st.info("No embeddable match found from YouTube API results. Try adjusting your prompt.")
         else:
