@@ -4,9 +4,11 @@ import random
 import re
 from datetime import date, datetime
 import time
+from urllib.parse import quote_plus
 
 import pandas as pd
 import plotly.express as px
+import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -61,6 +63,9 @@ BUSINESS_TYPE_OPTIONS = BUSINESS_TYPES + ["Any"]
 LICENSE_OPTIONS = ["Royalty-free", "Commercially licensed", "Unknown"]
 YOUTUBE_MOODS = ["calm", "energetic", "focused", "happy", "sad"]
 YOUTUBE_TIMES = ["morning", "afternoon", "evening", "night"]
+AI_SETTINGS = ["study", "restaurant", "retail", "gym", "gaming", "sleep", "work"]
+AI_ENERGY_OPTIONS = ["low", "medium", "high"]
+AI_VOCALS_OPTIONS = ["instrumental preferred", "vocals ok", "no preference"]
 
 
 def sample_tracks() -> list[dict]:
@@ -206,6 +211,284 @@ def init_state() -> None:
                 "time_of_day": "afternoon",
             },
         ]
+    if "ai_music_interpretation" not in st.session_state:
+        st.session_state.ai_music_interpretation = None
+    if "ai_selected_song" not in st.session_state:
+        st.session_state.ai_selected_song = None
+
+
+def read_secret(key: str) -> str | None:
+    env_value = os.getenv(key)
+    if env_value:
+        return env_value
+    try:
+        secret_value = st.secrets.get(key)
+        return secret_value if secret_value else None
+    except Exception:
+        return None
+
+
+def _parse_iso8601_duration_to_seconds(duration: str) -> int:
+    match = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", duration or "")
+    if not match:
+        return 0
+    hours = int(match.group(1) or 0)
+    minutes = int(match.group(2) or 0)
+    seconds = int(match.group(3) or 0)
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def _clean_music_analysis(data: dict) -> dict:
+    mood = str(data.get("mood", "focused")).strip() or "focused"
+    energy = str(data.get("energy", "medium")).strip().lower()
+    energy = energy if energy in AI_ENERGY_OPTIONS else "medium"
+    bpm_min = int(data.get("bpm_min", 70))
+    bpm_max = int(data.get("bpm_max", 110))
+    bpm_min = max(40, min(200, bpm_min))
+    bpm_max = max(40, min(220, bpm_max))
+    if bpm_min > bpm_max:
+        bpm_min, bpm_max = bpm_max, bpm_min
+    time_of_day = str(data.get("time_of_day", "any")).strip().lower() or "any"
+    search_query = str(data.get("search_query", "")).strip()
+    reason = str(data.get("reason", "")).strip()
+    if not search_query:
+        search_query = f"{mood} {energy} background music"
+    if not reason:
+        reason = "This recommendation was generated from your mood, energy, and context request."
+    return {
+        "mood": mood,
+        "energy": energy,
+        "bpm_min": bpm_min,
+        "bpm_max": bpm_max,
+        "time_of_day": time_of_day,
+        "search_query": search_query,
+        "reason": reason,
+    }
+
+
+def analyze_music_prompt(prompt: str, setting: str | None = None, energy: str | None = None, vocals: str | None = None) -> dict:
+    api_key = read_secret("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY is missing. Add it to Streamlit secrets to use AI Music Finder.")
+    if OpenAI is None:
+        raise ValueError("OpenAI SDK is not installed in this environment.")
+
+    client = OpenAI(api_key=api_key)
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["mood", "energy", "bpm_min", "bpm_max", "time_of_day", "search_query", "reason"],
+        "properties": {
+            "mood": {"type": "string"},
+            "energy": {"type": "string", "enum": ["low", "medium", "high"]},
+            "bpm_min": {"type": "integer"},
+            "bpm_max": {"type": "integer"},
+            "time_of_day": {"type": "string"},
+            "search_query": {"type": "string"},
+            "reason": {"type": "string"},
+        },
+    }
+
+    user_payload = {
+        "prompt": prompt,
+        "setting": setting,
+        "energy": energy,
+        "vocals": vocals,
+    }
+    instructions = (
+        "You are a music query parser. Return only JSON and no markdown. "
+        "Infer mood, energy, bpm range, time_of_day, and a practical YouTube search query for background listening."
+    )
+
+    try:
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            input=[
+                {"role": "system", "content": instructions},
+                {"role": "user", "content": json.dumps(user_payload)},
+            ],
+            text={"format": {"type": "json_schema", "name": "music_analysis", "schema": schema, "strict": True}},
+            temperature=0.3,
+        )
+        raw_text = response.output_text.strip()
+    except Exception:
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            input=[
+                {"role": "system", "content": instructions},
+                {"role": "user", "content": json.dumps(user_payload)},
+            ],
+            temperature=0.3,
+        )
+        raw_text = response.output_text.strip()
+
+    parsed = json.loads(raw_text)
+    return _clean_music_analysis(parsed)
+
+
+def fallback_search_query(prompt: str) -> str:
+    return f"https://www.youtube.com/results?search_query={quote_plus(prompt)}"
+
+
+def search_youtube_music(search_query: str) -> dict | None:
+    youtube_api_key = read_secret("YOUTUBE_API_KEY")
+    if not youtube_api_key:
+        return None
+
+    search_params = {
+        "part": "snippet",
+        "q": search_query,
+        "type": "video",
+        "videoEmbeddable": "true",
+        "maxResults": 5,
+        "safeSearch": "moderate",
+        "key": youtube_api_key,
+    }
+    search_response = requests.get(
+        "https://www.googleapis.com/youtube/v3/search", params=search_params, timeout=12
+    )
+    search_response.raise_for_status()
+    items = search_response.json().get("items", [])
+    if not items:
+        return None
+
+    video_ids = [item["id"]["videoId"] for item in items if item.get("id", {}).get("videoId")]
+    if not video_ids:
+        return None
+
+    details_response = requests.get(
+        "https://www.googleapis.com/youtube/v3/videos",
+        params={"part": "contentDetails,snippet", "id": ",".join(video_ids), "key": youtube_api_key},
+        timeout=12,
+    )
+    details_response.raise_for_status()
+    details_map = {v["id"]: v for v in details_response.json().get("items", [])}
+
+    wants_background = any(
+        token in search_query.lower() for token in ["background", "study", "focus", "work", "sleep", "cafe", "coffee"]
+    )
+    ranking_keywords = {"music", "study", "ambient", "lofi", "focus", "background", "instrumental", "playlist"}
+
+    scored: list[tuple[int, dict]] = []
+    for item in items:
+        snippet = item.get("snippet", {})
+        video_id = item.get("id", {}).get("videoId")
+        if not video_id:
+            continue
+        title = snippet.get("title", "")
+        description = snippet.get("description", "")
+        haystack = f"{title} {description}".lower()
+        if "shorts" in haystack or "#shorts" in haystack:
+            continue
+
+        details = details_map.get(video_id, {})
+        duration_seconds = _parse_iso8601_duration_to_seconds(details.get("contentDetails", {}).get("duration", ""))
+        if duration_seconds < 120:
+            continue
+
+        score = sum(2 for k in ranking_keywords if k in haystack)
+        if wants_background:
+            if duration_seconds >= 1800:
+                score += 8
+            elif duration_seconds >= 900:
+                score += 5
+            elif duration_seconds >= 300:
+                score += 2
+        else:
+            if duration_seconds >= 180:
+                score += 2
+        scored.append(
+            (
+                score,
+                {
+                    "title": title,
+                    "youtube_url": f"https://www.youtube.com/watch?v={video_id}",
+                    "channel": snippet.get("channelTitle", "Unknown channel"),
+                    "description": description,
+                },
+            )
+        )
+
+    if not scored:
+        return None
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return scored[0][1]
+
+
+def render_ai_music_finder() -> None:
+    st.subheader("AI Music Finder")
+    st.caption(
+        "Describe your target vibe and let AI interpret the request, then auto-find an embeddable YouTube track."
+    )
+    # Streamlit secrets needed:
+    # OPENAI_API_KEY="..."
+    # YOUTUBE_API_KEY="..."
+    with st.container(border=True):
+        prompt = st.text_area(
+            "Describe the music you want",
+            key="ai_music_prompt",
+            placeholder="I want calm Genshin-style music for studying at night",
+        )
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            setting = st.selectbox("setting", [""] + AI_SETTINGS, key="ai_music_setting")
+        with c2:
+            energy = st.selectbox("energy", [""] + AI_ENERGY_OPTIONS, key="ai_music_energy")
+        with c3:
+            vocals = st.selectbox("vocals", [""] + AI_VOCALS_OPTIONS, key="ai_music_vocals")
+
+        if st.button("Find Music", key="find_ai_music", type="primary", use_container_width=True):
+            if not prompt.strip():
+                st.warning("Please describe what kind of music you want.")
+            else:
+                try:
+                    interpretation = analyze_music_prompt(
+                        prompt=prompt.strip(),
+                        setting=setting or None,
+                        energy=energy or None,
+                        vocals=vocals or None,
+                    )
+                    st.session_state.ai_music_interpretation = interpretation
+
+                    youtube_match = search_youtube_music(interpretation["search_query"])
+                    if youtube_match:
+                        st.session_state.ai_selected_song = youtube_match
+                        st.session_state["selected_song"] = {
+                            "title": youtube_match["title"],
+                            "youtube_url": youtube_match["youtube_url"],
+                            "mood": interpretation["mood"],
+                            "bpm": interpretation["bpm_min"],
+                            "time_of_day": interpretation["time_of_day"],
+                        }
+                    else:
+                        st.session_state.ai_selected_song = None
+                except Exception as exc:
+                    st.error(f"Sorry, AI Music Finder couldn't process that request right now. ({exc})")
+
+    interpretation = st.session_state.get("ai_music_interpretation")
+    if interpretation:
+        st.markdown("#### AI interpretation")
+        st.json(
+            {
+                "mood": interpretation["mood"],
+                "bpm_range": [interpretation["bpm_min"], interpretation["bpm_max"]],
+                "energy": interpretation["energy"],
+                "search_query": interpretation["search_query"],
+                "reason": interpretation["reason"],
+            }
+        )
+
+        selected = st.session_state.get("ai_selected_song")
+        if selected:
+            st.success(f"Selected YouTube result: {selected['title']} — {selected['channel']}")
+            render_youtube_audio_player(selected["youtube_url"], selected["title"])
+        elif read_secret("YOUTUBE_API_KEY"):
+            st.info("No embeddable match found from YouTube API results. Try adjusting your prompt.")
+        else:
+            manual_url = fallback_search_query(interpretation["search_query"])
+            st.warning("YOUTUBE_API_KEY not found in Streamlit secrets.")
+            st.write("Open this search URL, pick a video, then paste it into the manual YouTube player:")
+            st.markdown(f"[Open YouTube search results]({manual_url})")
 
 
 def filter_tracks_by_controls(
@@ -1101,6 +1384,8 @@ with live_tab:
                         }
                     )
                     st.success("Song added to the YouTube song library.")
+
+    render_ai_music_finder()
 
     st.subheader("Smart Mood/BPM Song Picker")
     p1, p2 = st.columns(2)
