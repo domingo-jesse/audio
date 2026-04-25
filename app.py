@@ -673,11 +673,13 @@ def render_ai_music_finder() -> None:
             help="When enabled, AI searches every 3 minutes and keeps up to 5 queued songs.",
         )
 
-        b1, b2, _ = st.columns([1, 1, 2])
+        b1, b2, b3 = st.columns([1, 1, 1])
         with b1:
             skip_clicked = st.button("Skip Song", use_container_width=True)
         with b2:
             refresh_clicked = st.button("Refresh Queue", use_container_width=True)
+        with b3:
+            search_add_clicked = st.button("Search & Add", use_container_width=True)
 
     startup_error = None
     if (
@@ -729,6 +731,27 @@ def render_ai_music_finder() -> None:
         if added:
             st.success(f"Added {added} song(s) to queue.")
 
+    manual_add_error = None
+    if search_add_clicked:
+        if len(st.session_state.get("song_queue", [])) >= 5:
+            manual_add_error = "Queue is full (max 5 songs). Skip one song or wait for playback to continue."
+        else:
+            interpretation = st.session_state.get("ai_music_interpretation") or {}
+            manual_query = (interpretation.get("search_query") or prompt or "").strip()
+            if not manual_query:
+                manual_add_error = "Enter a music description first so AI can build a search query."
+            else:
+                try:
+                    match = search_youtube_track(manual_query, exclude_video_ids=get_all_queued_video_ids())
+                except Exception as exc:
+                    manual_add_error = f"YouTube search failed: {exc}"
+                else:
+                    if not match:
+                        manual_add_error = "No suitable track found under 5 minutes for that query."
+                    else:
+                        st.session_state.song_queue.append(match)
+                        st.success(f"Added to queue: {match['title']}")
+
     auto_error = None
     if st.session_state.get("auto_dj_mode"):
         added, auto_error = refill_song_queue(
@@ -745,7 +768,7 @@ def render_ai_music_finder() -> None:
     if queue_changed and st.session_state.get("auto_dj_mode"):
         st.rerun()
 
-    err_msg = startup_error or refresh_error or auto_error
+    err_msg = startup_error or refresh_error or manual_add_error or auto_error
     if err_msg:
         st.warning(err_msg)
 
