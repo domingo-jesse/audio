@@ -205,6 +205,12 @@ def init_state() -> None:
         st.session_state.is_playing = False
     if "auto_dj_mode" not in st.session_state:
         st.session_state.auto_dj_mode = True
+    if "active_video_id" not in st.session_state:
+        st.session_state.active_video_id = None
+    if "player_rendered_video_id" not in st.session_state:
+        st.session_state.player_rendered_video_id = None
+    if "player_component_html" not in st.session_state:
+        st.session_state.player_component_html = None
 
 
 def read_secret(key: str) -> str | None:
@@ -500,6 +506,9 @@ def advance_queue_if_needed() -> bool:
         duration_seconds = int(current_song.get("duration_seconds") or 0)
         if duration_seconds and now >= started_at + duration_seconds:
             st.session_state.current_song = None
+            st.session_state.active_video_id = None
+            st.session_state.player_rendered_video_id = None
+            st.session_state.player_component_html = None
             st.session_state.is_playing = False
             changed = True
 
@@ -507,10 +516,14 @@ def advance_queue_if_needed() -> bool:
         next_song = st.session_state.song_queue.pop(0)
         next_song["started_at"] = now
         st.session_state.current_song = next_song
+        st.session_state.active_video_id = next_song.get("video_id")
         st.session_state.is_playing = True
         changed = True
 
     if not st.session_state.get("current_song") and not st.session_state.get("song_queue"):
+        st.session_state.active_video_id = None
+        st.session_state.player_rendered_video_id = None
+        st.session_state.player_component_html = None
         st.session_state.is_playing = False
 
     return changed
@@ -633,6 +646,9 @@ def render_ai_music_finder() -> None:
 
     if skip_clicked:
         st.session_state.current_song = None
+        st.session_state.active_video_id = None
+        st.session_state.player_rendered_video_id = None
+        st.session_state.player_component_html = None
         st.session_state.is_playing = False
 
     if prompt.strip():
@@ -685,6 +701,7 @@ def render_ai_music_finder() -> None:
         render_youtube_audio_player(
             current_song["youtube_url"],
             f"{current_song['title']} · {current_song['channel']} ({format_duration(current_song['duration_seconds'])})",
+            duration_seconds=int(current_song.get("duration_seconds") or 0),
         )
         started_at = float(current_song.get("started_at") or time.time())
         remaining = max(0, int(current_song.get("duration_seconds", 0) - (time.time() - started_at)))
@@ -692,7 +709,7 @@ def render_ai_music_finder() -> None:
     else:
         st.info("No song currently playing. Add/refill queue to start playback.")
 
-    st.markdown("### Queue (max 5 songs)")
+    queue_placeholder = st.empty()
     queued_songs = st.session_state.get("song_queue", [])
     visible = []
     if current_song:
@@ -714,10 +731,12 @@ def render_ai_music_finder() -> None:
             }
         )
 
-    if visible:
-        st.dataframe(pd.DataFrame(visible[:5]), use_container_width=True, hide_index=True)
-    else:
-        st.caption("Queue is empty.")
+    with queue_placeholder.container():
+        st.markdown("### Queue (max 5 songs)")
+        if visible:
+            st.dataframe(pd.DataFrame(visible[:5]), use_container_width=True, hide_index=True)
+        else:
+            st.caption("Queue is empty.")
 
     interpretation = st.session_state.get("ai_music_interpretation")
     if interpretation:
@@ -732,15 +751,6 @@ def render_ai_music_finder() -> None:
             }
         )
 
-    if st.session_state.get("auto_dj_mode"):
-        components.html(
-            """
-            <script>
-                setTimeout(() => { window.parent.location.reload(); }, 15000);
-            </script>
-            """,
-            height=0,
-        )
 
 
 def filter_tracks_by_controls(
@@ -1208,72 +1218,99 @@ def extract_youtube_id(url: str) -> str | None:
     return None
 
 
-def render_youtube_audio_player(youtube_url: str, title: str | None = None) -> None:
+def render_youtube_audio_player(youtube_url: str, title: str | None = None, duration_seconds: int = 0) -> None:
     video_id = extract_youtube_id(youtube_url)
     if not video_id:
         st.error("Invalid YouTube URL. Please paste a valid YouTube link.")
         return
 
+    st.session_state.active_video_id = video_id
+
     if title:
         st.markdown(f"### Now Playing: {title}")
 
-    embed_url = f"https://www.youtube.com/embed/{video_id}?autoplay=1&enablejsapi=1&controls=1&rel=0"
-    html = f"""
-    <div style="
-        width: 100%;
-        max-width: 520px;
-        border-radius: 16px;
-        padding: 14px;
-        background: #111827;
-        color: white;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.18);
-        font-family: Arial, sans-serif;
-    ">
-        <div style="font-size: 14px; opacity: 0.8; margin-bottom: 8px;">
-            YouTube Audio Player
-        </div>
+    if st.session_state.get("player_rendered_video_id") != video_id:
+        embed_url = f"https://www.youtube.com/embed/{video_id}?autoplay=1&enablejsapi=1&controls=1&rel=0"
+        html = f"""
         <div style="
             width: 100%;
-            height: 96px;
-            overflow: hidden;
-            border-radius: 12px;
-            background: black;
+            max-width: 520px;
+            border-radius: 16px;
+            padding: 14px;
+            background: #111827;
+            color: white;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+            font-family: Arial, sans-serif;
         ">
-            <iframe
-                id="youtube-audio-player"
-                width="100%"
-                height="220"
-                src="{embed_url}"
-                title="YouTube player"
-                frameborder="0"
-                allow="autoplay"
-                allowfullscreen
-                style="margin-top: -62px;">
-            </iframe>
+            <div style="font-size: 14px; opacity: 0.8; margin-bottom: 8px;">
+                YouTube Audio Player
+            </div>
+            <div style="
+                width: 100%;
+                height: 96px;
+                overflow: hidden;
+                border-radius: 12px;
+                background: black;
+            ">
+                <iframe
+                    id="youtube-audio-player"
+                    width="100%"
+                    height="220"
+                    src="{embed_url}"
+                    title="YouTube player"
+                    frameborder="0"
+                    allow="autoplay"
+                    allowfullscreen
+                    style="margin-top: -62px;">
+                </iframe>
+            </div>
+            <div style="font-size: 12px; opacity: 0.7; margin-top: 8px;">
+                Audio is played through the official YouTube embedded player.
+            </div>
         </div>
-        <div style="font-size: 12px; opacity: 0.7; margin-top: 8px;">
-            Audio is played through the official YouTube embedded player.
-        </div>
-    </div>
-    <script>
-        const playerFrame = document.getElementById("youtube-audio-player");
-        if (playerFrame) {{
-            playerFrame.addEventListener("load", () => {{
-                playerFrame.contentWindow?.postMessage(
-                    JSON.stringify({{ event: "command", func: "playVideo", args: [] }}),
-                    "*"
-                );
+        <script>
+            const playerFrame = document.getElementById("youtube-audio-player");
+            let hasTriggeredAdvance = false;
+            const songDurationSeconds = {max(0, int(duration_seconds))};
+
+            function triggerAdvanceOnce() {{
+                if (hasTriggeredAdvance) return;
+                hasTriggeredAdvance = true;
                 setTimeout(() => {{
+                    window.parent.location.reload();
+                }}, 150);
+            }}
+
+            if (playerFrame) {{
+                playerFrame.addEventListener("load", () => {{
                     playerFrame.contentWindow?.postMessage(
-                        JSON.stringify({{ event: "command", func: "unMute", args: [] }}),
+                        JSON.stringify({{ event: "command", func: "playVideo", args: [] }}),
                         "*"
                     );
-                }}, 1500);
-            }});
-        }}
-    </script>
-    """
-    components.html(html, height=170)
+                    setTimeout(() => {{
+                        playerFrame.contentWindow?.postMessage(
+                            JSON.stringify({{ event: "command", func: "unMute", args: [] }}),
+                            "*"
+                        );
+                    }}, 1500);
+                }});
+
+                if (songDurationSeconds > 0) {{
+                    const advanceMs = Math.max(1000, songDurationSeconds * 1000 + 1000);
+                    setTimeout(triggerAdvanceOnce, advanceMs);
+                }}
+            }}
+        </script>
+        """
+        st.session_state.player_component_html = html
+        st.session_state.player_rendered_video_id = video_id
+    elif st.session_state.get("active_video_id") == video_id:
+        # fallback: same song is still active, keep existing player HTML untouched
+        pass
+
+    html_to_render = st.session_state.get("player_component_html")
+    if html_to_render:
+        components.html(html_to_render, height=170, key="youtube_audio_player_stable")
 
 
 def build_schedule(profile: dict) -> pd.DataFrame:
