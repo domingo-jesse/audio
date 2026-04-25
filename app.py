@@ -9,7 +9,6 @@ import pandas as pd
 import plotly.express as px
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
 
 try:
     from openai import OpenAI
@@ -208,8 +207,12 @@ def init_state() -> None:
         st.session_state.song_queue = []
     if "current_song" not in st.session_state:
         st.session_state.current_song = None
+    if "song_start_time" not in st.session_state:
+        st.session_state.song_start_time = 0.0
     if "last_ai_search_time" not in st.session_state:
         st.session_state.last_ai_search_time = 0.0
+    if "auto_dj_enabled" not in st.session_state:
+        st.session_state.auto_dj_enabled = True
     if "youtube_searches_today" not in st.session_state:
         st.session_state.youtube_searches_today = 0
     if "youtube_search_day_key" not in st.session_state:
@@ -500,6 +503,140 @@ def get_all_queued_video_ids() -> set[str]:
     return queued
 
 
+def is_duplicate_song(video_id: str) -> bool:
+    current = st.session_state.get("current_song")
+    if current and current.get("video_id") == video_id:
+        return True
+    return any(song.get("video_id") == video_id for song in st.session_state.get("song_queue", []))
+
+
+def maybe_finish_current_song() -> None:
+    current = st.session_state.get("current_song")
+    if not current:
+        return
+
+    duration = int(current.get("duration_seconds", 0))
+    started = float(st.session_state.get("song_start_time", 0))
+    if duration > 0 and time.time() - started >= duration:
+        st.session_state.current_song = None
+        st.session_state.song_start_time = 0
+        st.session_state.active_video_id = None
+
+
+def maybe_start_next_song() -> None:
+    if st.session_state.get("current_song"):
+        return
+
+    queue = st.session_state.get("song_queue", [])
+    if queue:
+        st.session_state.current_song = queue.pop(0)
+        st.session_state.song_start_time = time.time()
+        st.session_state.active_video_id = st.session_state.current_song.get("video_id")
+
+
+def add_songs_to_queue(candidate_songs: list[dict]) -> None:
+    for song in candidate_songs:
+        if len(st.session_state.song_queue) >= MAX_QUEUE_SIZE:
+            break
+
+        video_id = song.get("video_id")
+        duration = int(song.get("duration_seconds", 0))
+        if not video_id:
+            continue
+        if duration <= 0 or duration > MAX_SONG_DURATION_SECONDS:
+            continue
+        if is_duplicate_song(video_id):
+            continue
+
+        st.session_state.song_queue.append(song)
+
+
+def get_ai_youtube_song_candidates(max_needed: int = 5) -> list[dict]:
+    youtube_api_key = read_secret("YOUTUBE_API_KEY")
+    if not youtube_api_key:
+        st.warning("YOUTUBE_API_KEY is missing. Add it to Streamlit secrets to enable Auto-DJ queueing.")
+        return []
+
+    prompt = (st.session_state.get("ai_music_prompt") or "").strip()
+    if not prompt:
+        prompt, default_setting, default_energy, default_vocals = build_autodj_bootstrap_inputs(st.session_state.live)
+    else:
+        default_setting = st.session_state.get("ai_music_setting") or None
+        default_energy = st.session_state.get("ai_music_energy") or None
+        default_vocals = st.session_state.get("ai_music_vocals") or None
+
+    try:
+        queries = generate_ai_song_ideas(
+            prompt=prompt,
+            setting=default_setting,
+            energy=default_energy,
+            vocals=default_vocals,
+        )
+    except Exception:
+        return []
+
+    results: list[dict] = []
+    for query in queries:
+        if len(results) >= max_needed:
+            break
+        try:
+            items = search_youtube_cached(query)
+            st.session_state.youtube_searches_today = int(st.session_state.get("youtube_searches_today") or 0) + 1
+        except Exception:
+            continue
+
+        video_ids = [item.get("id", {}).get("videoId") for item in items if item.get("id", {}).get("videoId")]
+        if not video_ids:
+            continue
+
+        try:
+            details_map = get_video_details_batch(video_ids)
+        except Exception:
+            continue
+
+        for item in items:
+            if len(results) >= max_needed:
+                break
+            video_id = item.get("id", {}).get("videoId")
+            if not video_id or is_duplicate_song(video_id) or any(song.get("video_id") == video_id for song in results):
+                continue
+
+            details = details_map.get(video_id, {})
+            duration_seconds = parse_iso8601_duration(details.get("contentDetails", {}).get("duration", ""))
+            if duration_seconds <= 0 or duration_seconds > MAX_SONG_DURATION_SECONDS:
+                continue
+
+            snippet = details.get("snippet") or item.get("snippet", {})
+            results.append(
+                {
+                    "title": snippet.get("title", "Unknown title"),
+                    "channel": snippet.get("channelTitle", "Unknown channel"),
+                    "video_id": video_id,
+                    "youtube_url": f"https://www.youtube.com/watch?v={video_id}",
+                    "duration_seconds": duration_seconds,
+                }
+            )
+            break
+
+    return results
+
+
+def maybe_refill_queue() -> None:
+    if not st.session_state.get("auto_dj_enabled", True):
+        return
+    if len(st.session_state.song_queue) >= MAX_QUEUE_SIZE:
+        return
+
+    now = time.time()
+    last_search = float(st.session_state.get("last_ai_search_time", 0))
+    if now - last_search < 180:
+        return
+
+    candidate_songs = get_ai_youtube_song_candidates(max_needed=MAX_QUEUE_SIZE - len(st.session_state.song_queue))
+    add_songs_to_queue(candidate_songs)
+    st.session_state.last_ai_search_time = now
+
+
 def fill_queue_from_fallback(mood: str) -> int:
     try:
         songs = pd.read_csv(FALLBACK_SONGS_PATH).fillna("")
@@ -769,12 +906,7 @@ def render_ai_music_finder() -> None:
         with c3:
             vocals = st.selectbox("vocals", [""] + AI_VOCALS_OPTIONS, key="ai_music_vocals")
 
-        st.session_state.auto_dj_mode = st.toggle(
-            "Enable Auto-DJ mode",
-            value=st.session_state.get("auto_dj_mode", True),
-            key="auto_dj_mode_toggle",
-            help="When enabled, Auto-DJ refills only when the queue runs low and keeps up to 5 queued songs.",
-        )
+        st.toggle("Auto-DJ", key="auto_dj_enabled")
 
         b1, b2, b3 = st.columns([1, 1, 1])
         with b1:
@@ -783,29 +915,6 @@ def render_ai_music_finder() -> None:
             refresh_clicked = st.button("Refresh Queue", use_container_width=True)
         with b3:
             search_add_clicked = st.button("Search & Add", use_container_width=True)
-
-    startup_error = None
-    if (
-        st.session_state.get("auto_dj_mode", True)
-        and not st.session_state.get("initial_queue_bootstrap_done")
-        and not st.session_state.get("song_queue")
-        and not st.session_state.get("current_song")
-    ):
-        default_prompt, default_setting, default_energy, default_vocals = build_autodj_bootstrap_inputs(st.session_state.live)
-        bootstrap_prompt = (prompt.strip() or default_prompt)
-        interpretation = st.session_state.get("ai_music_interpretation") or {}
-        bootstrap_mood = interpretation.get("mood") or "focused"
-        added, startup_error = fill_queue_if_needed(prompt=bootstrap_prompt, mood=bootstrap_mood)
-        st.session_state.initial_queue_bootstrap_done = True
-        if added:
-            st.success(f"Auto-start added {added} song(s) based on mood and time of day.")
-
-    if skip_clicked:
-        st.session_state.current_song = None
-        st.session_state.active_video_id = None
-        st.session_state.player_rendered_video_id = None
-        st.session_state.player_component_html = None
-        st.session_state.is_playing = False
 
     if prompt.strip():
         try:
@@ -819,93 +928,58 @@ def render_ai_music_finder() -> None:
         except Exception as exc:
             st.warning(f"Could not update AI interpretation: {exc}")
 
-    refresh_error = None
-    if refresh_clicked:
-        interpretation = st.session_state.get("ai_music_interpretation") or {}
-        broad_query = (interpretation.get("search_query") or prompt.strip() or "upbeat pop songs under 5 minutes clean")
-        mood = interpretation.get("mood") or "upbeat"
-        if len(st.session_state.get("song_queue", [])) > QUEUE_REFILL_THRESHOLD:
-            refresh_error = "Queue refill runs only when queue has 2 or fewer songs."
-            added = 0
-        else:
-            added, refresh_error = fill_queue_if_needed(prompt=broad_query, mood=mood)
-        if added:
-            st.success(f"Added {added} song(s) to queue.")
-
-    manual_add_error = None
     if search_add_clicked:
-        if len(st.session_state.get("song_queue", [])) >= MAX_QUEUE_SIZE:
-            manual_add_error = "Queue is full (max 5 songs). Skip one song or wait for playback to continue."
+        if len(st.session_state.song_queue) >= MAX_QUEUE_SIZE:
+            st.warning("Queue is full (max 5 songs).")
         else:
-            interpretation = st.session_state.get("ai_music_interpretation") or {}
-            manual_query = (interpretation.get("search_query") or prompt or "").strip()
-            mood = interpretation.get("mood") or "focused"
-            if not manual_query:
-                manual_add_error = "Enter a music description first so AI can build a search query."
-            else:
-                added, manual_add_error = fill_queue_if_needed(prompt=manual_query, mood=mood)
-                if added:
-                    st.success(f"Added {added} song(s) to queue.")
+            needed = MAX_QUEUE_SIZE - len(st.session_state.song_queue)
+            add_songs_to_queue(get_ai_youtube_song_candidates(max_needed=needed))
+            st.session_state.last_ai_search_time = time.time()
+            st.rerun()
 
-    auto_error = None
-    if st.session_state.get("auto_dj_mode"):
-        interpretation = st.session_state.get("ai_music_interpretation") or {}
-        broad_query = (interpretation.get("search_query") or prompt.strip() or "focus background music under 5 minutes clean")
-        mood = interpretation.get("mood") or "focused"
-        added, auto_error = fill_queue_if_needed(prompt=broad_query, mood=mood)
-        if added:
-            st.info(f"Auto-DJ added {added} new song(s).")
-
-    queue_changed = advance_queue_if_needed()
-    if queue_changed and st.session_state.get("auto_dj_mode"):
+    if skip_clicked:
+        st.session_state.current_song = None
+        st.session_state.song_start_time = 0
         st.rerun()
 
-    err_msg = startup_error or refresh_error or manual_add_error or auto_error
-    if err_msg:
-        st.warning(err_msg)
+    if refresh_clicked:
+        candidate_songs = get_ai_youtube_song_candidates(max_needed=MAX_QUEUE_SIZE - len(st.session_state.song_queue))
+        add_songs_to_queue(candidate_songs)
+        st.session_state.last_ai_search_time = time.time()
+        st.rerun()
+
+    maybe_finish_current_song()
+    maybe_start_next_song()
+    maybe_refill_queue()
+    maybe_start_next_song()
 
     current_song = st.session_state.get("current_song")
     st.markdown("### Now Playing")
     if current_song:
         render_youtube_audio_player(
-            current_song["youtube_url"],
-            f"{current_song['title']} · {current_song['channel']} ({format_duration(current_song['duration_seconds'])})",
+            current_song.get("video_id", ""),
+            current_song.get("title", "Unknown title"),
             duration_seconds=int(current_song.get("duration_seconds") or 0),
         )
-        started_at = float(current_song.get("started_at") or time.time())
-        remaining = max(0, int(current_song.get("duration_seconds", 0) - (time.time() - started_at)))
-        st.caption(f"Remaining: {format_duration(remaining)}")
+        st.caption(
+            f"{current_song.get('title', 'Unknown title')} · "
+            f"{current_song.get('channel', 'Unknown channel')} · "
+            f"{format_duration(int(current_song.get('duration_seconds') or 0))}"
+        )
     else:
         st.info("No song currently playing. Add/refill queue to start playback.")
 
-    queue_placeholder = st.empty()
-    queued_songs = st.session_state.get("song_queue", [])
-    visible = []
-    if current_song:
-        visible.append(
-            {
-                "State": "Now",
-                "Title": current_song["title"],
-                "Channel": current_song["channel"],
-                "Duration": format_duration(current_song["duration_seconds"]),
-            }
-        )
-    for song in queued_songs:
-        visible.append(
-            {
-                "State": "Up next",
-                "Title": song["title"],
-                "Channel": song["channel"],
-                "Duration": format_duration(song["duration_seconds"]),
-            }
-        )
-
-    with queue_placeholder.container():
-        st.markdown("### Queue (max 5 songs)")
-        if visible:
-            st.dataframe(pd.DataFrame(visible[:5]), use_container_width=True, hide_index=True)
-        else:
-            st.caption("Queue is empty.")
+    st.markdown("### Queue (max 5 songs)")
+    queue = st.session_state.get("song_queue", [])[:MAX_QUEUE_SIZE]
+    if queue:
+        for idx, song in enumerate(queue, start=1):
+            st.write(
+                f"{idx}. {song.get('title', 'Unknown title')} — "
+                f"{song.get('channel', 'Unknown channel')} "
+                f"({format_duration(int(song.get('duration_seconds') or 0))})"
+            )
+    else:
+        st.caption("Queue is empty.")
 
     interpretation = st.session_state.get("ai_music_interpretation")
     if interpretation:
@@ -1387,99 +1461,16 @@ def extract_youtube_id(url: str) -> str | None:
     return None
 
 
-def render_youtube_audio_player(youtube_url: str, title: str | None = None, duration_seconds: int = 0) -> None:
-    video_id = extract_youtube_id(youtube_url)
+def render_youtube_audio_player(video_id: str, title: str = "", duration_seconds: int = 0) -> None:
     if not video_id:
-        st.error("Invalid YouTube URL. Please paste a valid YouTube link.")
+        st.error("Missing YouTube video ID for player rendering.")
         return
 
-    st.session_state.active_video_id = video_id
+    embed_url = f"https://www.youtube.com/embed/{video_id}?autoplay=1&enablejsapi=1"
+    st.iframe(embed_url, height=170)
 
-    if title:
-        st.markdown(f"### Now Playing: {title}")
 
-    if st.session_state.get("player_rendered_video_id") != video_id:
-        embed_url = f"https://www.youtube.com/embed/{video_id}?autoplay=1&enablejsapi=1&controls=1&rel=0"
-        html = f"""
-        <div style="
-            width: 100%;
-            max-width: 520px;
-            border-radius: 16px;
-            padding: 14px;
-            background: #111827;
-            color: white;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.18);
-            font-family: Arial, sans-serif;
-        ">
-            <div style="font-size: 14px; opacity: 0.8; margin-bottom: 8px;">
-                YouTube Audio Player
-            </div>
-            <div style="
-                width: 100%;
-                height: 96px;
-                overflow: hidden;
-                border-radius: 12px;
-                background: black;
-            ">
-                <iframe
-                    id="youtube-audio-player"
-                    width="100%"
-                    height="220"
-                    src="{embed_url}"
-                    title="YouTube player"
-                    frameborder="0"
-                    allow="autoplay"
-                    allowfullscreen
-                    style="margin-top: -62px;">
-                </iframe>
-            </div>
-            <div style="font-size: 12px; opacity: 0.7; margin-top: 8px;">
-                Audio is played through the official YouTube embedded player.
-            </div>
-        </div>
-        <script>
-            const playerFrame = document.getElementById("youtube-audio-player");
-            let hasTriggeredAdvance = false;
-            const songDurationSeconds = {max(0, int(duration_seconds))};
 
-            function triggerAdvanceOnce() {{
-                if (hasTriggeredAdvance) return;
-                hasTriggeredAdvance = true;
-                setTimeout(() => {{
-                    window.parent.location.reload();
-                }}, 150);
-            }}
-
-            if (playerFrame) {{
-                playerFrame.addEventListener("load", () => {{
-                    playerFrame.contentWindow?.postMessage(
-                        JSON.stringify({{ event: "command", func: "playVideo", args: [] }}),
-                        "*"
-                    );
-                    setTimeout(() => {{
-                        playerFrame.contentWindow?.postMessage(
-                            JSON.stringify({{ event: "command", func: "unMute", args: [] }}),
-                            "*"
-                        );
-                    }}, 1500);
-                }});
-
-                if (songDurationSeconds > 0) {{
-                    const advanceMs = Math.max(1000, songDurationSeconds * 1000 + 1000);
-                    setTimeout(triggerAdvanceOnce, advanceMs);
-                }}
-            }}
-        </script>
-        """
-        st.session_state.player_component_html = html
-        st.session_state.player_rendered_video_id = video_id
-    elif st.session_state.get("active_video_id") == video_id:
-        # fallback: same song is still active, keep existing player HTML untouched
-        pass
-
-    html_to_render = st.session_state.get("player_component_html")
-    if html_to_render:
-        components.html(html_to_render, height=170, key="youtube_audio_player_stable")
 
 
 def build_schedule(profile: dict) -> pd.DataFrame:
