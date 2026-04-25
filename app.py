@@ -1,6 +1,5 @@
 import json
 import os
-import random
 import re
 from datetime import date, datetime
 import time
@@ -61,8 +60,6 @@ LIBRARY_MOODS = ["Calm", "Cozy", "Premium", "Energetic", "Focused", "Social", "R
 TIME_OF_DAY_OPTIONS = ["Morning", "Lunch", "Afternoon", "Dinner", "Late Night", "Any"]
 BUSINESS_TYPE_OPTIONS = BUSINESS_TYPES + ["Any"]
 LICENSE_OPTIONS = ["Royalty-free", "Commercially licensed", "Unknown"]
-YOUTUBE_MOODS = ["calm", "energetic", "focused", "happy", "sad"]
-YOUTUBE_TIMES = ["morning", "afternoon", "evening", "night"]
 AI_SETTINGS = ["study", "restaurant", "retail", "gym", "gaming", "sleep", "work"]
 AI_ENERGY_OPTIONS = ["low", "medium", "high"]
 AI_VOCALS_OPTIONS = ["instrumental preferred", "vocals ok", "no preference"]
@@ -194,23 +191,6 @@ def init_state() -> None:
         st.session_state.music_library = sample_tracks()
     if "music_filters" not in st.session_state:
         st.session_state.music_filters = {"min_bpm": 70, "max_bpm": 120, "desired_moods": []}
-    if "youtube_song_library" not in st.session_state:
-        st.session_state.youtube_song_library = [
-            {
-                "title": "Example Calm Track",
-                "youtube_url": "https://www.youtube.com/watch?v=jfKfPfyJRdk",
-                "mood": "calm",
-                "bpm": 90,
-                "time_of_day": "evening",
-            },
-            {
-                "title": "Example Energy Track",
-                "youtube_url": "https://www.youtube.com/watch?v=5qap5aO4i9A",
-                "mood": "energetic",
-                "bpm": 125,
-                "time_of_day": "afternoon",
-            },
-        ]
     if "ai_music_interpretation" not in st.session_state:
         st.session_state.ai_music_interpretation = None
     if "ai_selected_song" not in st.session_state:
@@ -453,13 +433,6 @@ def render_ai_music_finder() -> None:
                     youtube_match = search_youtube_music(interpretation["search_query"])
                     if youtube_match:
                         st.session_state.ai_selected_song = youtube_match
-                        st.session_state["selected_song"] = {
-                            "title": youtube_match["title"],
-                            "youtube_url": youtube_match["youtube_url"],
-                            "mood": interpretation["mood"],
-                            "bpm": interpretation["bpm_min"],
-                            "time_of_day": interpretation["time_of_day"],
-                        }
                     else:
                         st.session_state.ai_selected_song = None
                 except Exception as exc:
@@ -487,7 +460,7 @@ def render_ai_music_finder() -> None:
         else:
             manual_url = fallback_search_query(interpretation["search_query"])
             st.warning("YOUTUBE_API_KEY not found in Streamlit secrets.")
-            st.write("Open this search URL, pick a video, then paste it into the manual YouTube player:")
+            st.write("Open this search URL and pick a video manually:")
             st.markdown(f"[Open YouTube search results]({manual_url})")
 
 
@@ -1036,21 +1009,6 @@ def render_youtube_audio_player(youtube_url: str, title: str | None = None) -> N
     components.html(html, height=170)
 
 
-def pick_song(
-    song_library: list[dict], mood: str, bpm_min: int, bpm_max: int, time_of_day: str | None = None
-) -> dict | None:
-    matches: list[dict] = []
-    for song in song_library:
-        mood_matches = song["mood"] == mood
-        bpm_matches = bpm_min <= int(song["bpm"]) <= bpm_max
-        time_matches = True if not time_of_day else song.get("time_of_day") == time_of_day
-        if mood_matches and bpm_matches and time_matches:
-            matches.append(song)
-    if not matches:
-        return None
-    return random.choice(matches)
-
-
 def render_music_player(tracks: list[dict]) -> None:
     st.markdown("### In-App Music Player")
     st.caption("Play a track directly in Whisper using a local file path or a public audio URL from your library.")
@@ -1351,62 +1309,7 @@ with live_tab:
     render_music_player(st.session_state.music_library)
 
     st.divider()
-    st.subheader("YouTube Audio Player")
-    manual_col, add_col = st.columns([1.1, 1])
-    with manual_col:
-        manual_url = st.text_input("Paste a YouTube URL", key="manual_youtube_url")
-        manual_title = st.text_input("Song title", value="Manual YouTube Track", key="manual_youtube_title")
-        if st.button("Play Manual YouTube Track", key="play_manual_youtube"):
-            render_youtube_audio_player(manual_url, manual_title)
-
-    with add_col:
-        st.caption("Add songs to the in-session YouTube library.")
-        with st.form("youtube_song_form", clear_on_submit=True):
-            y_title = st.text_input("Song title", key="youtube_song_title")
-            y_mood = st.selectbox("Mood", YOUTUBE_MOODS, key="youtube_song_mood")
-            y_bpm = st.number_input("BPM", min_value=40, max_value=220, value=95, step=1, key="youtube_song_bpm")
-            y_time = st.selectbox("Time of day", YOUTUBE_TIMES, key="youtube_song_time")
-            y_url = st.text_input("YouTube URL", key="youtube_song_url")
-            add_youtube_song = st.form_submit_button("Add Song")
-            if add_youtube_song:
-                if not y_title.strip() or not y_url.strip():
-                    st.error("Song title and YouTube URL are required.")
-                elif not extract_youtube_id(y_url.strip()):
-                    st.error("Invalid YouTube URL. Use watch, youtu.be, or embed links.")
-                else:
-                    st.session_state.youtube_song_library.append(
-                        {
-                            "title": y_title.strip(),
-                            "youtube_url": y_url.strip(),
-                            "mood": y_mood,
-                            "bpm": int(y_bpm),
-                            "time_of_day": y_time,
-                        }
-                    )
-                    st.success("Song added to the YouTube song library.")
-
     render_ai_music_finder()
-
-    st.subheader("Smart Mood/BPM Song Picker")
-    p1, p2 = st.columns(2)
-    with p1:
-        picker_mood = st.selectbox("Mood", YOUTUBE_MOODS, key="youtube_picker_mood")
-        picker_time = st.selectbox("Time of Day", YOUTUBE_TIMES, key="youtube_picker_time")
-    with p2:
-        bpm_min, bpm_max = st.slider("BPM Range", 40, 200, (80, 120), key="youtube_picker_bpm")
-
-    if st.button("Pick Song", key="youtube_pick_song"):
-        selected_song = pick_song(st.session_state.youtube_song_library, picker_mood, bpm_min, bpm_max, picker_time)
-        if selected_song:
-            st.session_state["selected_song"] = selected_song
-        else:
-            st.warning("No matching song found. Try widening the BPM range or changing the mood.")
-
-    if "selected_song" in st.session_state:
-        song = st.session_state["selected_song"]
-        st.write(f"Selected: {song['title']}")
-        st.write(f"Mood: {song['mood']} | BPM: {song['bpm']} | Time: {song['time_of_day']}")
-        render_youtube_audio_player(song["youtube_url"], song["title"])
 
 if show_secondary and rec_tab is not None:
     with rec_tab:
