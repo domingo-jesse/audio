@@ -63,6 +63,15 @@ LICENSE_OPTIONS = ["Royalty-free", "Commercially licensed", "Unknown"]
 AI_SETTINGS = ["study", "restaurant", "retail", "gym", "gaming", "sleep", "work"]
 AI_ENERGY_OPTIONS = ["low", "medium", "high"]
 AI_VOCALS_OPTIONS = ["instrumental preferred", "vocals ok", "no preference"]
+MAX_QUEUE_SIZE = 5
+QUEUE_REFILL_THRESHOLD = 2
+MAX_SONG_DURATION_SECONDS = 300
+MAX_YOUTUBE_SEARCHES_PER_DAY = 25
+FALLBACK_SONGS_PATH = "songs_fallback.csv"
+
+
+class YouTubeQuotaExceededError(Exception):
+    """Raised when YouTube Data API quota has been exhausted."""
 
 
 def sample_tracks() -> list[dict]:
@@ -201,6 +210,12 @@ def init_state() -> None:
         st.session_state.current_song = None
     if "last_ai_search_time" not in st.session_state:
         st.session_state.last_ai_search_time = 0.0
+    if "youtube_searches_today" not in st.session_state:
+        st.session_state.youtube_searches_today = 0
+    if "youtube_search_day_key" not in st.session_state:
+        st.session_state.youtube_search_day_key = ""
+    if "youtube_quota_blocked" not in st.session_state:
+        st.session_state.youtube_quota_blocked = False
     if "is_playing" not in st.session_state:
         st.session_state.is_playing = False
     if "auto_dj_mode" not in st.session_state:
@@ -226,7 +241,7 @@ def read_secret(key: str) -> str | None:
         return None
 
 
-def _parse_iso8601_duration_to_seconds(duration: str) -> int:
+def parse_iso8601_duration(duration: str) -> int:
     match = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", duration or "")
     if not match:
         return 0
@@ -234,6 +249,27 @@ def _parse_iso8601_duration_to_seconds(duration: str) -> int:
     minutes = int(match.group(2) or 0)
     seconds = int(match.group(3) or 0)
     return hours * 3600 + minutes * 60 + seconds
+
+
+def get_today_key() -> str:
+    return date.today().isoformat()
+
+
+def _reset_daily_youtube_budget_if_needed() -> None:
+    today_key = get_today_key()
+    if st.session_state.get("youtube_search_day_key") != today_key:
+        st.session_state.youtube_search_day_key = today_key
+        st.session_state.youtube_searches_today = 0
+        st.session_state.youtube_quota_blocked = False
+
+
+def can_search_youtube() -> bool:
+    _reset_daily_youtube_budget_if_needed()
+    if st.session_state.get("youtube_quota_blocked"):
+        return False
+    if not read_secret("YOUTUBE_API_KEY"):
+        return False
+    return int(st.session_state.get("youtube_searches_today") or 0) < MAX_YOUTUBE_SEARCHES_PER_DAY
 
 
 def _clean_music_analysis(data: dict) -> dict:
@@ -413,15 +449,15 @@ def build_autodj_bootstrap_inputs(live: dict) -> tuple[str, str | None, str | No
     return prompt, setting, energy, "instrumental preferred"
 
 
-def search_youtube_track(search_query: str, exclude_video_ids: set[str] | None = None) -> dict | None:
+@st.cache_data(ttl=86400)
+def search_youtube_cached(query: str) -> list:
     youtube_api_key = read_secret("YOUTUBE_API_KEY")
     if not youtube_api_key:
-        return None
+        return []
 
-    excluded = exclude_video_ids or set()
     search_params = {
         "part": "snippet",
-        "q": search_query,
+        "q": query,
         "type": "video",
         "videoEmbeddable": "true",
         "videoCategoryId": "10",
@@ -429,51 +465,31 @@ def search_youtube_track(search_query: str, exclude_video_ids: set[str] | None =
         "safeSearch": "moderate",
         "key": youtube_api_key,
     }
-    search_response = requests.get(
-        "https://www.googleapis.com/youtube/v3/search", params=search_params, timeout=12
-    )
-    search_response.raise_for_status()
-    items = search_response.json().get("items", [])
-    if not items:
-        return None
+    response = requests.get("https://www.googleapis.com/youtube/v3/search", params=search_params, timeout=12)
+    if response.status_code == 403 and "quotaExceeded" in response.text:
+        raise YouTubeQuotaExceededError("YouTube search quota exceeded.")
+    response.raise_for_status()
+    return response.json().get("items", [])
 
-    video_ids = [item.get("id", {}).get("videoId") for item in items]
-    video_ids = [vid for vid in video_ids if vid and vid not in excluded]
-    if not video_ids:
-        return None
 
-    details_response = requests.get(
+def get_video_details_batch(video_ids: list[str]) -> dict[str, dict]:
+    youtube_api_key = read_secret("YOUTUBE_API_KEY")
+    if not youtube_api_key or not video_ids:
+        return {}
+
+    response = requests.get(
         "https://www.googleapis.com/youtube/v3/videos",
-        params={"part": "contentDetails,snippet", "id": ",".join(video_ids), "key": youtube_api_key},
+        params={
+            "part": "contentDetails,snippet",
+            "id": ",".join(video_ids),
+            "key": youtube_api_key,
+        },
         timeout=12,
     )
-    details_response.raise_for_status()
-    details_map = {v["id"]: v for v in details_response.json().get("items", [])}
-
-    for item in items:
-        video_id = item.get("id", {}).get("videoId")
-        if not video_id or video_id in excluded:
-            continue
-        details = details_map.get(video_id, {})
-        duration_seconds = _parse_iso8601_duration_to_seconds(details.get("contentDetails", {}).get("duration", ""))
-        if duration_seconds <= 0 or duration_seconds > 300:
-            continue
-
-        snippet = details.get("snippet") or item.get("snippet", {})
-        title = snippet.get("title", "Unknown title")
-        haystack = f"{title} {snippet.get('description', '')}".lower()
-        if "#shorts" in haystack or "shorts" in haystack:
-            continue
-
-        return {
-            "video_id": video_id,
-            "title": title,
-            "youtube_url": f"https://www.youtube.com/watch?v={video_id}",
-            "channel": snippet.get("channelTitle", "Unknown channel"),
-            "duration_seconds": duration_seconds,
-            "search_query": search_query,
-        }
-    return None
+    if response.status_code == 403 and "quotaExceeded" in response.text:
+        raise YouTubeQuotaExceededError("YouTube videos quota exceeded.")
+    response.raise_for_status()
+    return {item["id"]: item for item in response.json().get("items", [])}
 
 
 def get_all_queued_video_ids() -> set[str]:
@@ -484,46 +500,133 @@ def get_all_queued_video_ids() -> set[str]:
     return queued
 
 
-def refill_song_queue(prompt: str, setting: str | None, energy: str | None, vocals: str | None, force: bool = False) -> tuple[int, str | None]:
-    auto_dj_mode = st.session_state.get("auto_dj_mode", True)
-    if not force and not auto_dj_mode:
-        return 0, None
-
-    now = time.time()
-    last_search = float(st.session_state.get("last_ai_search_time") or 0)
-    queue_len = len(st.session_state.get("song_queue", []))
-    if not force:
-        if queue_len >= 5:
-            return 0, None
-        if now - last_search < 180:
-            return 0, None
-
-    if not read_secret("YOUTUBE_API_KEY"):
-        return 0, "YOUTUBE_API_KEY is missing. Add it in Streamlit secrets to enable queue playback."
-
+def fill_queue_from_fallback(mood: str) -> int:
     try:
-        song_queries = generate_ai_song_ideas(prompt=prompt, setting=setting, energy=energy, vocals=vocals)
-    except Exception as exc:
-        st.session_state.last_ai_search_time = now
-        return 0, f"AI queue generation failed: {exc}"
+        songs = pd.read_csv(FALLBACK_SONGS_PATH).fillna("")
+    except Exception:
+        return 0
 
-    added = 0
+    if songs.empty:
+        return 0
+
+    normalized_mood = str(mood or "").strip().lower()
+    if normalized_mood:
+        mood_matches = songs[songs["mood"].astype(str).str.lower() == normalized_mood]
+        if not mood_matches.empty:
+            songs = mood_matches
+
+    songs = songs[songs["duration_seconds"].astype(int) <= MAX_SONG_DURATION_SECONDS]
+    if songs.empty:
+        return 0
+
     excluded_ids = get_all_queued_video_ids()
     queue = st.session_state.song_queue
-    for query in song_queries:
-        if len(queue) >= 5:
+    needed = max(0, MAX_QUEUE_SIZE - len(queue))
+    if needed <= 0:
+        return 0
+
+    added = 0
+    for _, row in songs.iterrows():
+        video_id = str(row.get("video_id", "")).strip()
+        if not video_id or video_id in excluded_ids:
+            continue
+        queue.append(
+            {
+                "video_id": video_id,
+                "title": str(row.get("title", "Unknown title")).strip() or "Unknown title",
+                "youtube_url": f"https://www.youtube.com/watch?v={video_id}",
+                "channel": str(row.get("artist", "Unknown artist")).strip() or "Unknown artist",
+                "duration_seconds": int(row.get("duration_seconds", 0) or 0),
+                "search_query": f"fallback:{normalized_mood or 'any'}",
+            }
+        )
+        excluded_ids.add(video_id)
+        added += 1
+        if added >= needed or len(queue) >= MAX_QUEUE_SIZE:
             break
-        try:
-            match = search_youtube_track(query, exclude_video_ids=excluded_ids)
-        except Exception:
+    return added
+
+
+def fill_queue_if_needed(prompt: str, mood: str) -> tuple[int, str | None]:
+    queue = st.session_state.song_queue
+    queue_len = len(queue)
+    if queue_len >= MAX_QUEUE_SIZE:
+        return 0, None
+    if queue_len > QUEUE_REFILL_THRESHOLD:
+        return 0, None
+
+    needed = MAX_QUEUE_SIZE - queue_len
+    if needed <= 0:
+        return 0, None
+
+    if not can_search_youtube():
+        added = fill_queue_from_fallback(mood=mood)
+        searches_today = int(st.session_state.get("youtube_searches_today") or 0)
+        if searches_today >= MAX_YOUTUBE_SEARCHES_PER_DAY:
+            return added, "Daily YouTube search budget reached. Using saved/fallback songs for now."
+        if added == 0 and not read_secret("YOUTUBE_API_KEY"):
+            return 0, "YOUTUBE_API_KEY is missing. Using fallback songs when available."
+        return added, None
+
+    broad_query = (prompt or f"{mood} background music under 5 minutes clean").strip()
+    try:
+        search_items = search_youtube_cached(broad_query)
+    except YouTubeQuotaExceededError:
+        st.session_state.youtube_quota_blocked = True
+        return fill_queue_from_fallback(mood=mood), "YouTube quota exceeded. Using saved/fallback songs for now."
+    except Exception as exc:
+        return 0, f"YouTube search failed: {exc}"
+
+    st.session_state.youtube_searches_today = int(st.session_state.get("youtube_searches_today") or 0) + 1
+    excluded_ids = get_all_queued_video_ids()
+    video_ids = [
+        item.get("id", {}).get("videoId")
+        for item in search_items
+        if item.get("id", {}).get("videoId") and item.get("id", {}).get("videoId") not in excluded_ids
+    ]
+    if not video_ids:
+        return fill_queue_from_fallback(mood=mood), None
+
+    try:
+        details_map = get_video_details_batch(video_ids)
+    except YouTubeQuotaExceededError:
+        st.session_state.youtube_quota_blocked = True
+        return fill_queue_from_fallback(mood=mood), "YouTube quota exceeded. Using saved/fallback songs for now."
+    except Exception as exc:
+        return 0, f"YouTube video lookup failed: {exc}"
+
+    added = 0
+    for item in search_items:
+        if len(queue) >= MAX_QUEUE_SIZE or added >= needed:
+            break
+        video_id = item.get("id", {}).get("videoId")
+        if not video_id or video_id in excluded_ids:
             continue
-        if not match or match["video_id"] in excluded_ids:
+        details = details_map.get(video_id, {})
+        duration_seconds = parse_iso8601_duration(details.get("contentDetails", {}).get("duration", ""))
+        if duration_seconds <= 0 or duration_seconds > MAX_SONG_DURATION_SECONDS:
             continue
-        queue.append(match)
-        excluded_ids.add(match["video_id"])
+        snippet = details.get("snippet") or item.get("snippet", {})
+        title = snippet.get("title", "Unknown title")
+        haystack = f"{title} {snippet.get('description', '')}".lower()
+        if "#shorts" in haystack or "shorts" in haystack:
+            continue
+
+        queue.append(
+            {
+                "video_id": video_id,
+                "title": title,
+                "youtube_url": f"https://www.youtube.com/watch?v={video_id}",
+                "channel": snippet.get("channelTitle", "Unknown channel"),
+                "duration_seconds": duration_seconds,
+                "search_query": broad_query,
+            }
+        )
+        excluded_ids.add(video_id)
         added += 1
 
-    st.session_state.last_ai_search_time = now
+    if added < needed:
+        added += fill_queue_from_fallback(mood=mood)
     return added, None
 
 
@@ -611,7 +714,7 @@ def search_youtube_music(search_query: str) -> dict | None:
             continue
 
         details = details_map.get(video_id, {})
-        duration_seconds = _parse_iso8601_duration_to_seconds(details.get("contentDetails", {}).get("duration", ""))
+        duration_seconds = parse_iso8601_duration(details.get("contentDetails", {}).get("duration", ""))
         if duration_seconds < 120:
             continue
 
@@ -670,7 +773,7 @@ def render_ai_music_finder() -> None:
             "Enable Auto-DJ mode",
             value=st.session_state.get("auto_dj_mode", True),
             key="auto_dj_mode_toggle",
-            help="When enabled, AI searches every 3 minutes and keeps up to 5 queued songs.",
+            help="When enabled, Auto-DJ refills only when the queue runs low and keeps up to 5 queued songs.",
         )
 
         b1, b2, b3 = st.columns([1, 1, 1])
@@ -689,13 +792,10 @@ def render_ai_music_finder() -> None:
         and not st.session_state.get("current_song")
     ):
         default_prompt, default_setting, default_energy, default_vocals = build_autodj_bootstrap_inputs(st.session_state.live)
-        added, startup_error = refill_song_queue(
-            prompt=(prompt.strip() or default_prompt),
-            setting=setting or default_setting,
-            energy=energy or default_energy,
-            vocals=vocals or default_vocals,
-            force=True,
-        )
+        bootstrap_prompt = (prompt.strip() or default_prompt)
+        interpretation = st.session_state.get("ai_music_interpretation") or {}
+        bootstrap_mood = interpretation.get("mood") or "focused"
+        added, startup_error = fill_queue_if_needed(prompt=bootstrap_prompt, mood=bootstrap_mood)
         st.session_state.initial_queue_bootstrap_done = True
         if added:
             st.success(f"Auto-start added {added} song(s) based on mood and time of day.")
@@ -721,46 +821,38 @@ def render_ai_music_finder() -> None:
 
     refresh_error = None
     if refresh_clicked:
-        added, refresh_error = refill_song_queue(
-            prompt=(prompt.strip() or "upbeat background music"),
-            setting=setting or None,
-            energy=energy or None,
-            vocals=vocals or None,
-            force=True,
-        )
+        interpretation = st.session_state.get("ai_music_interpretation") or {}
+        broad_query = (interpretation.get("search_query") or prompt.strip() or "upbeat pop songs under 5 minutes clean")
+        mood = interpretation.get("mood") or "upbeat"
+        if len(st.session_state.get("song_queue", [])) > QUEUE_REFILL_THRESHOLD:
+            refresh_error = "Queue refill runs only when queue has 2 or fewer songs."
+            added = 0
+        else:
+            added, refresh_error = fill_queue_if_needed(prompt=broad_query, mood=mood)
         if added:
             st.success(f"Added {added} song(s) to queue.")
 
     manual_add_error = None
     if search_add_clicked:
-        if len(st.session_state.get("song_queue", [])) >= 5:
+        if len(st.session_state.get("song_queue", [])) >= MAX_QUEUE_SIZE:
             manual_add_error = "Queue is full (max 5 songs). Skip one song or wait for playback to continue."
         else:
             interpretation = st.session_state.get("ai_music_interpretation") or {}
             manual_query = (interpretation.get("search_query") or prompt or "").strip()
+            mood = interpretation.get("mood") or "focused"
             if not manual_query:
                 manual_add_error = "Enter a music description first so AI can build a search query."
             else:
-                try:
-                    match = search_youtube_track(manual_query, exclude_video_ids=get_all_queued_video_ids())
-                except Exception as exc:
-                    manual_add_error = f"YouTube search failed: {exc}"
-                else:
-                    if not match:
-                        manual_add_error = "No suitable track found under 5 minutes for that query."
-                    else:
-                        st.session_state.song_queue.append(match)
-                        st.success(f"Added to queue: {match['title']}")
+                added, manual_add_error = fill_queue_if_needed(prompt=manual_query, mood=mood)
+                if added:
+                    st.success(f"Added {added} song(s) to queue.")
 
     auto_error = None
     if st.session_state.get("auto_dj_mode"):
-        added, auto_error = refill_song_queue(
-            prompt=(prompt.strip() or "focus background music"),
-            setting=setting or None,
-            energy=energy or None,
-            vocals=vocals or None,
-            force=False,
-        )
+        interpretation = st.session_state.get("ai_music_interpretation") or {}
+        broad_query = (interpretation.get("search_query") or prompt.strip() or "focus background music under 5 minutes clean")
+        mood = interpretation.get("mood") or "focused"
+        added, auto_error = fill_queue_if_needed(prompt=broad_query, mood=mood)
         if added:
             st.info(f"Auto-DJ added {added} new song(s).")
 
